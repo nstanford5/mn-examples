@@ -1,0 +1,25 @@
+{
+  "name": "mn-examples",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Official Midnight example DApps and smart contracts, verified to compile and run against a pinned toolchain.",
+  "packageManager": "yarn@4.18.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "examples/*"
+  ],
+  "scripts": {
+    "new:example": "node scripts/new-example.mjs",
+    "compile": "yarn workspaces foreach --all --parallel run compile",
+    "test": "yarn workspaces foreach --all --verbose run test",
+    "test:local": "yarn workspaces foreach --all --verbose run test:local"
+  },
+  "resolutions": {
+    "@midnight-ntwrk/wallet-sdk": "1.2.0",
+    "@midnight-ntwrk/ledger-v8": "8.1.2",
+    "@midnight-ntwrk/onchain-runtime-v3": "3.1.1",
+    "@midnight-ntwrk/zkir-v2": "2.1.1"
+  }
+}
