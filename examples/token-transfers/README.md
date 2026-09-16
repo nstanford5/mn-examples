@@ -1,6 +1,10 @@
 # Token Transfers Example
 
-> TODO: one paragraph describing what this example demonstrates.
+A Compact contract that exercises Midnight's token primitives end to end —
+minting, sending, and receiving across all three token flavors: contract-domain
+**unshielded** tokens (color derived from a domain separator), the native
+**NIGHT** token, and **shielded** (zswap) coins. Each circuit is a small, focused
+example of one operation rather than a full application.
 
 ## Set up
 

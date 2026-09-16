@@ -5,7 +5,18 @@
 
 ## What it teaches
 
-- TODO: bullet points describing what this example demonstrates.
+- Minting and moving **unshielded tokens**: `mintUnshieldedToken`,
+  `sendUnshielded`, `receiveUnshielded`, with a token color derived from a domain
+  separator via `tokenType`.
+- Handling the native **NIGHT** token, whose color is `default<Bytes<32>>`, for
+  send and receive.
+- **Shielded (zswap) coins**: `mintShieldedToken`, `sendShielded`,
+  `receiveShielded`, and assembling a `QualifiedShieldedCoinInfo` from a minted
+  `ShieldedCoinInfo`.
+- Addressing recipients with `left`/`right<ContractAddress, UserAddress>` (and
+  the zswap equivalents) and referring to the contract itself via `kernel.self()`.
+- Where `disclose()` is required to move parameter values into public token
+  operations.
 
 ## Layout
 

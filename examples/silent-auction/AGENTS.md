@@ -5,7 +5,20 @@
 
 ## What it teaches
 
-- TODO: bullet points describing what this example demonstrates.
+- A **commit-reveal** scheme: the organizer commits to a hidden reserve price
+  with `persistentCommit` in the constructor and reveals it later, with `assert`
+  guarding against changing the committed value.
+- **`sealed` ledger** fields for state set once and never mutated (organizer key,
+  hidden reserve, max bids, deposit amount).
+- A ledger **state machine** (`AuctionState`: `RECEIVE → OPEN → CLOSED → PAID`)
+  that gates which circuit may run in each phase.
+- **Unlinkable, DApp-specific public keys** derived from a witness secret via
+  `persistentHash` with a domain tag, used for organizer/bidder authorization.
+- **Unshielded token** flows: an organizer NIGHT deposit, minting the auctioned
+  NFT, and settlement payouts to winner and organizer
+  (`mintUnshieldedToken` / `sendUnshielded` / `receiveUnshielded`).
+- Bidding logic over a `Map<Bytes<32>, Uint<16>>`: unique bidders, overwriting
+  raise-only bids, and high-bid tracking.
 
 ## Layout
 

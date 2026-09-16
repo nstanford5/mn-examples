@@ -1,6 +1,13 @@
 # Silent Auction Example
 
-> TODO: one paragraph describing what this example demonstrates.
+A "silent" auction for a single NFT. The organizer commits to a secret reserve
+(minimum) price that stays hidden from bidders until bidding closes — while the
+bids themselves and the current high bid are public. It combines a
+**commit-reveal** scheme (`persistentCommit`) with a ledger **state machine**
+(`RECEIVE → OPEN → CLOSED → PAID`), organizer/bidder access control derived from
+a witness secret, and **unshielded token** flows: a NIGHT deposit that
+incentivizes the organizer to finish, minting the auctioned NFT, and paying out
+the winner and organizer at settlement.
 
 ## Set up
 

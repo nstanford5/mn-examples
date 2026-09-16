@@ -18,12 +18,10 @@ mn-examples/
 │   ├── hello-world/      # environment smoke test + minimal contract/test suite
 │   ├── calculator/       # public ledger value + arithmetic circuits + a divMod witness
 │   ├── private-party/    # private on-chain data, access control, DUST sponsorship
-│   ├── token-transfers/   # TODO: one-line description
-│   ├── silent-auction/   # TODO: one-line description
-│   ├── ke-example/   # TODO: one-line description
-│   ├── jay-example/   # TODO: one-line description
+│   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens
+│   ├── silent-auction/   # sealed reserve price (commit-reveal), NFT auction state machine
 │   └── battleship/       # Compact contract as a state machine, RBAC, private state
-├── experimental/         # (placeholder) examples on pre-release toolchains
+├── templates/example/    # scaffold copied by `yarn new:example`
 ├── tsconfig.base.json    # shared TypeScript compiler options
 ├── vitest.config.ts      # aggregate test projects (per-example configs still own env)
 └── .github/workflows/    # CI: compile-and-run every example on a matrix
