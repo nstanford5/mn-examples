@@ -248,6 +248,33 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@midnight-ntwrk/example-election@workspace:examples/election":
+  version: 0.0.0-use.local
+  resolution: "@midnight-ntwrk/example-election@workspace:examples/election"
+  dependencies:
+    "@midnight-ntwrk/midnight-js-contracts": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-network-id": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-protocol": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-types": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-utils": "npm:4.1.1"
+    "@midnight-ntwrk/testkit-js": "npm:4.1.1"
+    "@midnight-ntwrk/wallet-sdk": "npm:1.2.0"
+    "@types/node": "npm:^22.0.0"
+    "@types/ws": "npm:^8.5.9"
+    pino: "npm:^9.0.0"
+    pino-pretty: "npm:^13.0.0"
+    rxjs: "npm:^7.8.2"
+    typescript: "npm:^5.7.0"
+    vite-node: "npm:^6.0.0"
+    vitest: "npm:^4.1.0"
+    ws: "npm:^8.14.2"
+  languageName: unknown
+  linkType: soft
+
 "@midnight-ntwrk/example-hello-world@workspace:examples/hello-world":
   version: 0.0.0-use.local
   resolution: "@midnight-ntwrk/example-hello-world@workspace:examples/hello-world"

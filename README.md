@@ -20,6 +20,7 @@ mn-examples/
 │   ├── private-party/    # private on-chain data, access control, DUST sponsorship
 │   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens
 │   ├── silent-auction/   # sealed reserve price (commit-reveal), NFT auction state machine
+│   ├── election/   # TODO: one-line description
 │   └── battleship/       # Compact contract as a state machine, RBAC, private state
 ├── templates/example/    # scaffold copied by `yarn new:example`
 ├── tsconfig.base.json    # shared TypeScript compiler options

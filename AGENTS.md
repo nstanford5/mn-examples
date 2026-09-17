@@ -49,6 +49,7 @@ Per example (from `examples/<name>`): `yarn env:up`, `yarn wait:dust`,
 | `silent-auction` | TODO: what it teaches |
 | `ke-example` | TODO: what it teaches |
 | `jay-example` | TODO: what it teaches |
+| `election` | TODO: what it teaches |
 
 Each example has its own `AGENTS.md` with specifics.
 
