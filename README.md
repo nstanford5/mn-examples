@@ -21,6 +21,7 @@ mn-examples/
 │   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens
 │   ├── silent-auction/   # sealed reserve price (commit-reveal), NFT auction state machine
 │   ├── election/   # TODO: one-line description
+│   ├── secret-message/   # private message: publish a hash commitment, not the plaintext
 │   └── battleship/       # Compact contract as a state machine, RBAC, private state
 ├── templates/example/    # scaffold copied by `yarn new:example`
 ├── tsconfig.base.json    # shared TypeScript compiler options

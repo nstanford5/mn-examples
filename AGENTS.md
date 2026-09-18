@@ -50,6 +50,7 @@ Per example (from `examples/<name>`): `yarn env:up`, `yarn wait:dust`,
 | `ke-example` | TODO: what it teaches |
 | `jay-example` | TODO: what it teaches |
 | `election` | TODO: what it teaches |
+| `secret-message` | Private on-chain data via hashing: a witness supplies a secret, the circuit publishes only its `persistentHash` commitment |
 
 Each example has its own `AGENTS.md` with specifics.
 
