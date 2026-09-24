@@ -15,11 +15,9 @@ import type { WalletFacade, FacadeState, UnshieldedKeystore } from '@midnight-nt
 import type { EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
 import * as Rx from 'rxjs';
 import type { Logger } from 'pino';
-import { assembleWallet, type FastSyncOptions } from './fast-sync/fast-wallet.js';
+import { assembleWallet, type FastSyncOptions, type WalletSecret } from '@midnight-ntwrk/example-fast-sync';
 
-export type WalletSecret =
-  | { kind: 'seed'; value: string }
-  | { kind: 'mnemonic'; value: string };
+export type { WalletSecret };
 
 export class MidnightWalletProvider implements MidnightProvider, WalletProvider {
   readonly wallet: WalletFacade;
@@ -182,33 +180,6 @@ export async function syncWallet(
   );
 }
 
-/**
- * Block until the wallet holds at least `minCoins` spendable DUST coin(s).
- *
- * `syncWallet`'s isStrictlyComplete() means "synced to chain tip", not "has
- * spendable funds" — a freshly registered wallet is at tip with zero DUST until
- * generation accrues. This waits for that, and is shared by the preprod test's
- * funding gate and scripts/wait-for-dust.ts.
- */
-export async function waitForDust(
-  logger: Logger,
-  wallet: WalletFacade,
-  minCoins = 1,
-  timeoutMs = 180_000,
-): Promise<void> {
-  logger.info(`Waiting for ≥${minCoins} spendable DUST coin(s) (timeout ${timeoutMs}ms)...`);
-  await Rx.firstValueFrom(
-    wallet.state().pipe(
-      Rx.tap((s: FacadeState) =>
-        logger.info(`dust: ${s.dust.availableCoins.length} coin(s), balance ${s.dust.balance(new Date())} STAR`),
-      ),
-      Rx.filter((s: FacadeState) => s.dust.availableCoins.length >= minCoins),
-      Rx.take(1),
-      Rx.timeout({
-        each: timeoutMs,
-        with: () => Rx.throwError(() => new Error(`No spendable DUST coin within ${timeoutMs}ms`)),
-      }),
-    ),
-  );
-  logger.info('DUST ready.');
-}
+// waitForDust now lives in the shared harness package, next to the funding
+// gate that drives it. Re-exported so existing imports keep working.
+export { waitForDust } from '@midnight-ntwrk/example-fast-sync';

@@ -4,5 +4,9 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "contract/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "contract/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }

@@ -8,28 +8,24 @@ import {
   type DeployedContract,
 } from '@midnight-ntwrk/midnight-js-contracts';
 import type { ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
-import {
-  type EnvironmentConfiguration,
-  waitForFunds,
-} from '@midnight-ntwrk/testkit-js';
-import type { FacadeState } from '@midnight-ntwrk/wallet-sdk';
-import { firstValueFrom, throwError } from 'rxjs';
-import { filter, take, timeout } from 'rxjs/operators';
+import { type EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
 import pino from 'pino';
 
 import { getConfig } from '../config.js';
+import { MidnightWalletProvider, syncWallet } from '../wallet.js';
 import {
-  MidnightWalletProvider,
-  syncWallet,
-  waitForDust,
+  getChainTipHeight,
+  getOrCreateTestWallet,
+  resolveWallet,
+  waitForNightThenDust,
+  REFERENCE_ROOT,
+  type FastSyncOptions,
   type WalletSecret,
-} from '../wallet.js';
-import { getChainTipHeight, type FastSyncOptions } from '../fast-sync/fast-wallet.js';
-import { getOrCreateTestWallet } from '../fast-sync/test-wallet.js';
+} from '@midnight-ntwrk/example-fast-sync';
 import { buildProviders, type HelloWorldProviders } from '../providers.js';
 
-// Shipped pre-seed reference bundles, and where generated wallets are cached.
-const REFERENCE_ROOT = fileURLToPath(new URL('../../preseed', import.meta.url));
+// Where an auto-generated throwaway wallet is cached (gitignored). Only used
+// when the root .env.<network> has no wallet for this network.
 const WALLETS_DIR = fileURLToPath(new URL('../../.fast-sync-wallets', import.meta.url));
 import {
   CompiledHelloWorldContract,
@@ -62,30 +58,6 @@ const logger = pino({
 
 const network = process.env['MIDNIGHT_NETWORK'] ?? 'local';
 
-// A wallet explicitly supplied via .env.<network> (MIDNIGHT_<NET>_SEED or
-// _MNEMONIC), or null when none is set. This is the fallback path: a wallet that
-// already has on-chain history cannot be fast-synced (the guard refuses it), so
-// it is only used when a developer deliberately provides one.
-function tryEnvSecret(net: string): WalletSecret | null {
-  const upper = net.toUpperCase();
-  const mnemonicEnv = `MIDNIGHT_${upper}_MNEMONIC`;
-  const seedEnv = `MIDNIGHT_${upper}_SEED`;
-  const mnemonic = process.env[mnemonicEnv]?.trim().replace(/\s+/g, ' ');
-  const seedHex = process.env[seedEnv]?.trim();
-
-  if (mnemonic && seedHex) {
-    throw new Error(`Set only one of ${mnemonicEnv} or ${seedEnv} (both are defined).`);
-  }
-  if (mnemonic) return { kind: 'mnemonic', value: mnemonic };
-  if (seedHex) {
-    if (!/^[0-9a-fA-F]+$/.test(seedHex) || seedHex.length % 2 !== 0) {
-      throw new Error(`${seedEnv} must be a hex string of even length (no 0x prefix).`);
-    }
-    return { kind: 'seed', value: seedHex };
-  }
-  return null;
-}
-
 interface WalletSetup {
   secret: WalletSecret;
   fastSync?: FastSyncOptions;
@@ -93,19 +65,31 @@ interface WalletSetup {
   isNew: boolean;
 }
 
-// Resolve the wallet for a run. The DEFAULT — the standard developer entry point
-// — is a freshly generated wallet that fast-syncs from the shipped reference. A
-// wallet with history supplied via .env is the fallback, taking a normal full
-// sync (fast-sync cannot safely seed a wallet that predates the reference).
-async function resolveWallet(net: string, config: ReturnType<typeof getConfig>): Promise<WalletSetup> {
+// Resolve the wallet for a run.
+//
+// Preferred: one of the four shared wallets from the repo-root .env.<network>,
+// which carry a recorded birthday and therefore fast-sync. Failing that, this
+// example keeps its original standalone behaviour — generate a throwaway wallet
+// at the current tip, fast-sync it, and ask the developer to fund it — so
+// hello-world still works as a zero-setup smoke test.
+async function resolveHelloWorldWallet(
+  net: string,
+  config: ReturnType<typeof getConfig>,
+): Promise<WalletSetup> {
   if (net === 'local') {
     return { secret: { kind: 'seed', value: ALICE_LOCAL_SEED }, isNew: false };
   }
 
-  const imported = tryEnvSecret(net);
-  if (imported) {
-    logger.info(`Using the wallet from .env.${net} — full sync (fast-sync applies only to freshly generated wallets).`);
-    return { secret: imported, isNew: false };
+  try {
+    const shared = resolveWallet(net);
+    logger.info(
+      shared.fastSync
+        ? `Using ${shared.role} from the root .env.${net} (birthday ${shared.fastSync.birthday}); fast-sync enabled.`
+        : `Using ${shared.role} from the root .env.${net} — no birthday recorded, so this is a full sync.`,
+    );
+    return { secret: shared.secret, fastSync: shared.fastSync, isNew: false };
+  } catch {
+    // Nothing in .env — fall through to the self-service path below.
   }
 
   const tip = await getChainTipHeight(config.indexer);
@@ -123,54 +107,6 @@ async function resolveWallet(net: string, config: ReturnType<typeof getConfig>):
     fastSync: { referenceRoot: REFERENCE_ROOT, birthday: wallet.birthday },
     isNew,
   };
-}
-
-// How long to wait for the developer to fund the wallet, and for DUST to accrue.
-const FUND_TIMEOUT_MS = Number(process.env['MIDNIGHT_FUND_TIMEOUT_MS'] ?? 30 * 60_000);
-
-function hasNight(s: FacadeState): boolean {
-  return Object.values(s.unshielded.balances).some((v) => v > 0n);
-}
-
-// A blocking funding gate for a freshly generated wallet. Unlike waitForFunds
-// (a one-shot check), this actually pauses: it prints the address and holds on
-// the live wallet state until NIGHT arrives from the faucet, registers the NIGHT
-// for DUST generation, then holds again until spendable DUST has accrued — the
-// registration self-funds from the DUST its NIGHT generates, so that second wait
-// is real. Only then can the wallet balance a transaction's fees.
-async function waitForNightThenDust(
-  provider: MidnightWalletProvider,
-  envConfig: EnvironmentConfiguration,
-  faucet: string,
-): Promise<void> {
-  const address = String(provider.unshieldedKeystore.getBech32Address());
-  logger.info('────────────────────────────────────────────────────────────');
-  logger.info('Fund this wallet with NIGHT at the faucet — the suite resumes automatically once it arrives:');
-  logger.info(`  address: ${address}`);
-  logger.info(`  faucet:  ${faucet}`);
-  logger.info('────────────────────────────────────────────────────────────');
-
-  // 1) Hold until NIGHT arrives. The wallet keeps syncing, so state() emits as
-  //    the funding transaction lands.
-  await firstValueFrom(
-    provider.wallet.state().pipe(
-      filter((s: FacadeState) => hasNight(s)),
-      take(1),
-      timeout({
-        each: FUND_TIMEOUT_MS,
-        with: () =>
-          throwError(() => new Error(`No NIGHT at ${address} within ${FUND_TIMEOUT_MS}ms — fund it at ${faucet}`)),
-      }),
-    ),
-  );
-  logger.info('NIGHT received; registering NIGHT→DUST generation...');
-
-  // 2) Register the NIGHT UTxOs for DUST generation (needs NIGHT, now present).
-  await waitForFunds(provider.wallet, envConfig, false, provider.unshieldedKeystore);
-
-  // 3) Hold until spendable DUST has accrued (shared with scripts/wait-for-dust.ts).
-  await waitForDust(logger, provider.wallet, 1, FUND_TIMEOUT_MS);
-  logger.info('Proceeding with the test suite.');
 }
 
 describe(`Hello World Contract (${network})`, () => {
@@ -205,7 +141,7 @@ describe(`Hello World Contract (${network})`, () => {
       proofServer: config.proofServer,
     };
 
-    const setup = await resolveWallet(network, config);
+    const setup = await resolveHelloWorldWallet(network, config);
     wallet = await MidnightWalletProvider.build(logger, envConfig, setup.secret, {
       fastSync: setup.fastSync,
     });
@@ -215,7 +151,14 @@ describe(`Hello World Contract (${network})`, () => {
     if (isRemote) {
       // A freshly generated wallet holds no NIGHT. Block until the developer
       // funds it at the faucet, then until it has spendable DUST for fees.
-      await waitForNightThenDust(wallet, envConfig, config.faucet);
+      await waitForNightThenDust(
+        logger,
+        wallet.wallet,
+        wallet.unshieldedKeystore,
+        envConfig,
+        config.faucet,
+        { label: 'hello-world wallet' },
+      );
     }
 
     providers = buildProviders(wallet, zkConfigPath, config);

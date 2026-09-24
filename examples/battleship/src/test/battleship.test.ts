@@ -25,7 +25,8 @@ import pino from 'pino';
 import { submitCallTx, deployContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import type { ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
-import { type EnvironmentConfiguration, waitForFunds } from '@midnight-ntwrk/testkit-js';
+import { type EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
+import { resolveWallet, waitForNightThenDust } from '@midnight-ntwrk/example-fast-sync';
 import { getConfig } from '../config.js';
 import { MidnightWalletProvider, syncWallet, type WalletSecret } from '../wallet.js';
 import { buildProviders, type BattleshipProviders } from '../providers.js';
@@ -53,45 +54,6 @@ process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
 });
 
-type Role = 'ALICE' | 'BOB';
-
-// Genesis seeds for the local dev node — pre-funded, used only on `local`.
-const LOCAL_SEEDS: Record<Role, string> = {
-    ALICE: '0000000000000000000000000000000000000000000000000000000000000001',
-    BOB:   '0000000000000000000000000000000000000000000000000000000000000002',
-};
-
-function resolveSecret(net: string, role: Role): WalletSecret {
-    if (net === 'local') return { kind: 'seed', value: LOCAL_SEEDS[role] };
-
-    const upper = net.toUpperCase();
-    const mnemonicEnv = `MIDNIGHT_${upper}_${role}_MNEMONIC`;
-    const seedEnv = `MIDNIGHT_${upper}_${role}_SEED`;
-    const mnemonic = process.env[mnemonicEnv]?.trim().replace(/\s+/g, ' ');
-    const seedHex = process.env[seedEnv]?.trim();
-
-    if (mnemonic && seedHex) {
-        throw new Error(
-            `Set only one of ${mnemonicEnv} or ${seedEnv} (both are defined).`,
-        );
-    }
-    if (mnemonic) {
-        return { kind: 'mnemonic', value: mnemonic };
-    }
-    if (seedHex) {
-        if (!/^[0-9a-fA-F]+$/.test(seedHex) || seedHex.length % 2 !== 0) {
-            throw new Error(
-                `${seedEnv} must be a hex string of even length (no 0x prefix).`,
-            );
-        }
-        return { kind: 'seed', value: seedHex };
-    }
-    throw new Error(
-        `Either ${mnemonicEnv} or ${seedEnv} is required for network '${net}'. ` +
-            `Set one in .env.${net} or the shell.`,
-    );
-}
-
 const ALICE_PRIVATE_ID = 'alicePrivateState';
 const BOB_PRIVATE_ID = 'bobPrivateState';
 
@@ -110,8 +72,8 @@ describe(`Battleship Smart Contract via midnight-js (${network})`, () => {
     let contractAddress: ContractAddress;
 
     const config = getConfig();
-    const aliceSecret = resolveSecret(network, 'ALICE');
-    const bobSecret = resolveSecret(network, 'BOB');
+    const aliceSetup = resolveWallet(network, 'ALICE');
+    const bobSetup = resolveWallet(network, 'BOB');
     const isRemote = network !== 'local';
     const syncTimeoutMs = Number(
         process.env['MIDNIGHT_SYNC_TIMEOUT_MS'] ??
@@ -144,27 +106,34 @@ describe(`Battleship Smart Contract via midnight-js (${network})`, () => {
             proofServer: config.proofServer,
         };
 
-        aliceWallet = await MidnightWalletProvider.build(logger, envConfig, aliceSecret);
+        aliceWallet = await MidnightWalletProvider.build(logger, envConfig, aliceSetup.secret, {
+            fastSync: aliceSetup.fastSync,
+        });
         await aliceWallet.start();
         await syncWallet(logger, aliceWallet.wallet, syncTimeoutMs);
 
-        bobWallet = await MidnightWalletProvider.build(logger, envConfig, bobSecret);
+        bobWallet = await MidnightWalletProvider.build(logger, envConfig, bobSetup.secret, {
+            fastSync: bobSetup.fastSync,
+        });
         await bobWallet.start();
         await syncWallet(logger, bobWallet.wallet, syncTimeoutMs);
 
         if (isRemote) {
-            // NIGHT→DUST registration per wallet. Seeds are pre-funded; idempotent.
-            for (const [name, w] of [
-                ['Alice', aliceWallet],
-                ['Bob', bobWallet],
+            // Hold until each wallet has NIGHT from the faucet and spendable
+            // DUST. Idempotent: a wallet that is already funded passes straight
+            // through. Sequential on purpose — both share the same faucet.
+            for (const [role, w] of [
+                [aliceSetup.role, aliceWallet],
+                [bobSetup.role, bobWallet],
             ] as const) {
-                const nightBalance = await waitForFunds(
+                await waitForNightThenDust(
+                    logger,
                     w.wallet,
-                    envConfig,
-                    false,
                     w.unshieldedKeystore,
+                    envConfig,
+                    config.faucet,
+                    { label: role },
                 );
-                logger.info(`${name} NIGHT balance on '${network}': ${nightBalance}`);
             }
         }
 

@@ -18,7 +18,8 @@ import { randomBytes } from 'node:crypto';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { createUnprovenCallTx, deployContract, submitCallTx, type DeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { type ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
-import { type EnvironmentConfiguration, waitForFunds } from '@midnight-ntwrk/testkit-js';
+import { type EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
+import { resolveWallet, waitForNightThenDust } from '@midnight-ntwrk/example-fast-sync';
 import pino from 'pino';
 
 import { getConfig } from '../config.js';
@@ -39,47 +40,6 @@ const logger = pino({
     transport: { target: 'pino-pretty' },
 });
 
-type Role = 'ALICE' | 'DAVE';
-
-// Genesis seeds for the local dev node — pre-funded, used only on `local`.
-// Dave is deliberately NOT a genesis seed: he starts with no NIGHT and no DUST,
-// and Alice funds him with NIGHT (only) during setup.
-const LOCAL_SEEDS: Record<Role, string> = {
-    ALICE: '0000000000000000000000000000000000000000000000000000000000000001',
-    DAVE:  '000000000000000000000000000000000000000000000000000000000000000d',
-};
-
-function resolveSecret(net: string, role: Role): WalletSecret {
-    if (net === 'local') return { kind: 'seed', value: LOCAL_SEEDS[role] };
-
-    const upper = net.toUpperCase();
-    const mnemonicEnv = `MIDNIGHT_${upper}_${role}_MNEMONIC`;
-    const seedEnv = `MIDNIGHT_${upper}_${role}_SEED`;
-    const mnemonic = process.env[mnemonicEnv]?.trim().replace(/\s+/g, ' ');
-    const seedHex = process.env[seedEnv]?.trim();
-
-    if (mnemonic && seedHex) {
-        throw new Error(
-            `Set only one of ${mnemonicEnv} or ${seedEnv} (both are defined).`,
-        );
-    }
-    if (mnemonic) {
-        return { kind: 'mnemonic', value: mnemonic };
-    }
-    if (seedHex) {
-        if (!/^[0-9a-fA-F]+$/.test(seedHex) || seedHex.length % 2 !== 0) {
-            throw new Error(
-                `${seedEnv} must be a hex string of even length (no 0x prefix).`,
-            );
-        }
-        return { kind: 'seed', value: seedHex };
-    }
-    throw new Error(
-        `Either ${mnemonicEnv} or ${seedEnv} is required for network '${net}'. ` +
-            `Set one in .env.${net} or the shell.`,
-    );
-}
-
 const network = process.env['MIDNIGHT_NETWORK'] ?? 'local';
 
 describe(`DUST fee sponsorship — Alice pays Dave's fees (${network})`, () => {
@@ -91,8 +51,8 @@ describe(`DUST fee sponsorship — Alice pays Dave's fees (${network})`, () => {
     let daveAddressArg: { bytes: Uint8Array };
 
     const config = getConfig();
-    const aliceSecret = resolveSecret(network, 'ALICE');
-    const daveSecret = resolveSecret(network, 'DAVE');
+    const aliceSetup = resolveWallet(network, 'ALICE');
+    const daveSetup = resolveWallet(network, 'DAVE');
     const isRemote = network !== 'local';
     const syncTimeoutMs = Number(
         process.env['MIDNIGHT_SYNC_TIMEOUT_MS'] ??
@@ -160,23 +120,42 @@ describe(`DUST fee sponsorship — Alice pays Dave's fees (${network})`, () => {
             proofServer: config.proofServer,
         };
 
-        aliceWallet = await MidnightWalletProvider.build(logger, envConfig, aliceSecret);
+        aliceWallet = await MidnightWalletProvider.build(logger, envConfig, aliceSetup.secret, {
+            fastSync: aliceSetup.fastSync,
+        });
         await aliceWallet.start();
         await syncWallet(logger, aliceWallet.wallet, syncTimeoutMs);
 
-        daveWallet = await MidnightWalletProvider.build(logger, envConfig, daveSecret);
+        daveWallet = await MidnightWalletProvider.build(logger, envConfig, daveSetup.secret, {
+            fastSync: daveSetup.fastSync,
+        });
         await daveWallet.start();
         await syncWallet(logger, daveWallet.wallet, syncTimeoutMs);
 
         if (isRemote) {
-            // Alice is the sponsor: she must be registered for DUST generation.
-            const aliceNight = await waitForFunds(
+            // Alice is the sponsor: she must hold NIGHT and be registered for
+            // DUST generation, because she pays Dave's fees.
+            await waitForNightThenDust(
+                logger,
                 aliceWallet.wallet,
-                envConfig,
-                false,
                 aliceWallet.unshieldedKeystore,
+                envConfig,
+                config.faucet,
+                { label: 'Alice (sponsor)' },
             );
-            logger.info(`Alice NIGHT balance on '${network}': ${aliceNight}`);
+
+            // Dave needs tNIGHT for the entry fee and NOTHING else. Registering
+            // him for DUST would give him his own fee money and destroy the
+            // premise of this suite, so the gate stops at NIGHT. The first test
+            // below asserts he really has zero DUST.
+            await waitForNightThenDust(
+                logger,
+                daveWallet.wallet,
+                daveWallet.unshieldedKeystore,
+                envConfig,
+                config.faucet,
+                { label: 'Dave (sponsored)', registerDust: false },
+            );
         }
 
         // Two different address shapes are in play, so they get two different names:

@@ -51,4 +51,5 @@ yarn env:down
 
 This repository is currently only set up to support a local devnet running via
 Docker. Configurations for other networks are stubbed in `src/config.ts` and can
-be enabled by supplying a funded wallet seed via `.env.<network>`.
+be enabled by supplying a funded wallet seed in the repo-root `.env.<network>` —
+see [FAST-SYNC.md](../../FAST-SYNC.md).

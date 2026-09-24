@@ -1,0 +1,36 @@
+{
+  "name": "@midnight-ntwrk/example-fast-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared preprod/preview test-wallet harness for the examples: pre-seed fast sync, seed resolution from .env, and the faucet funding gate.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "wallets:new": "vite-node scripts/new-preprod-wallets.ts",
+    "preseed:cut": "vite-node scripts/cut-preseed.ts"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/midnight-js-network-id": "4.1.1",
+    "@midnight-ntwrk/midnight-js-protocol": "4.1.1",
+    "@midnight-ntwrk/testkit-js": "4.1.1",
+    "@midnight-ntwrk/wallet-sdk": "1.2.0",
+    "@midnight-ntwrk/wallet-sdk-abstractions": "2.1.0",
+    "@polkadot/api": "16.5.6",
+    "@polkadot/types": "16.5.6",
+    "@polkadot/util": "14.0.3",
+    "pino": "^9.0.0",
+    "pino-pretty": "^13.0.0",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vite-node": "^6.0.0"
+  }
+}

@@ -39,6 +39,11 @@ Tear the network down when finished:
 yarn env:down
 ```
 
-This example is set up for a local devnet running via Docker. Configurations for
-other networks live in `src/config.ts`; supply a funded wallet seed via
-`.env.<network>` to run against them.
+This example is set up for a local devnet running via Docker.
+
+To run it against **preprod** or **preview** instead, see
+[FAST-SYNC.md](../../FAST-SYNC.md) at the repo root. In short: start a local proof
+server (`yarn proof:up`), then from the repo root run `yarn preseed:cut` followed
+by `yarn wallets:new`, fund the printed addresses at the faucet, and run
+`yarn test:preprod`. The wallet seeds live in one repo-root `.env.<network>` that
+every example shares.

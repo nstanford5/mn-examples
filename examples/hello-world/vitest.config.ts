@@ -1,13 +1,15 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { loadEnv } from 'vite';
 
 const network = process.env['MIDNIGHT_NETWORK'] ?? 'local';
 const isRemote = network !== 'local';
 
-// For remote networks, source secrets (e.g. MIDNIGHT_PREVIEW_SEED) from
-// .env.<network> so they don't need to be passed on the command line.
-// Shell env still wins over file values.
-const envFromFile = isRemote ? loadEnv(network, process.cwd(), '') : {};
+// Remote runs read their wallet seeds from a single repo-root .env.<network>,
+// so one set of funded wallets serves every example. Shell env still wins over
+// file values. Generate the file with `yarn wallets:new`.
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+const envFromFile = isRemote ? loadEnv(network, repoRoot, '') : {};
 
 export default defineConfig({
   test: {

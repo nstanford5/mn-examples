@@ -24,6 +24,8 @@ dist/
 **/.env.preprod
 **/.env.preview
 **/.fast-sync-wallets/
+# scratch dir used while re-cutting a pre-seed bundle; only present mid-cut
+preseed/.staging-*/
 
 # OS / editor
 .DS_Store

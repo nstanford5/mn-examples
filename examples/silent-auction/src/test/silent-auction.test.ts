@@ -47,7 +47,6 @@ import {
 import { SucceedEntirely } from '@midnight-ntwrk/midnight-js-types';
 import {
   type EnvironmentConfiguration,
-  waitForFunds,
 } from '@midnight-ntwrk/testkit-js';
 import { firstValueFrom } from 'rxjs';
 import pino from 'pino';
@@ -58,6 +57,7 @@ import {
   syncWallet,
   type WalletSecret,
 } from '../wallet.js';
+import { resolveWallet, waitForNightThenDust } from '@midnight-ntwrk/example-fast-sync';
 import { buildProviders, type SilentAuctionProviders } from '../providers.js';
 import {
   CompiledSilentAuctionContract,
@@ -77,14 +77,6 @@ globalThis.WebSocket = WebSocket;
 
 type Role = 'ORGANIZER' | 'BIDDER_ONE' | 'BIDDER_TWO';
 
-// Genesis seeds for the local dev node — pre-funded, used only on `local`. The
-// undeployed network funds exactly these three seeds.
-const LOCAL_SEEDS: Record<Role, string> = {
-  ORGANIZER: '0000000000000000000000000000000000000000000000000000000000000001',
-  BIDDER_ONE: '0000000000000000000000000000000000000000000000000000000000000002',
-  BIDDER_TWO: '0000000000000000000000000000000000000000000000000000000000000003',
-};
-
 // Each wallet keeps its private state under its own id.
 const PRIVATE_STATE_IDS: Record<Role, string> = {
   ORGANIZER: 'organizerPrivateState',
@@ -98,36 +90,6 @@ const logger = pino({
 });
 
 const network = process.env['MIDNIGHT_NETWORK'] ?? 'local';
-
-// Local uses the pre-funded devnet seeds. For a remote network, supply a funded
-// seed or mnemonic per role via .env.<network>, e.g.
-// MIDNIGHT_PREVIEW_ORGANIZER_SEED / MIDNIGHT_PREVIEW_BIDDER_ONE_MNEMONIC.
-function resolveSecret(net: string, role: Role): WalletSecret {
-  if (net === 'local') return { kind: 'seed', value: LOCAL_SEEDS[role] };
-
-  const upper = net.toUpperCase();
-  const mnemonicEnv = `MIDNIGHT_${upper}_${role}_MNEMONIC`;
-  const seedEnv = `MIDNIGHT_${upper}_${role}_SEED`;
-  const mnemonic = process.env[mnemonicEnv]?.trim().replace(/\s+/g, ' ');
-  const seedHex = process.env[seedEnv]?.trim();
-
-  if (mnemonic && seedHex) {
-    throw new Error(`Set only one of ${mnemonicEnv} or ${seedEnv} (both are defined).`);
-  }
-  if (mnemonic) {
-    return { kind: 'mnemonic', value: mnemonic };
-  }
-  if (seedHex) {
-    if (!/^[0-9a-fA-F]+$/.test(seedHex) || seedHex.length % 2 !== 0) {
-      throw new Error(`${seedEnv} must be a hex string of even length (no 0x prefix).`);
-    }
-    return { kind: 'seed', value: seedHex };
-  }
-  throw new Error(
-    `Either ${mnemonicEnv} or ${seedEnv} is required for network '${net}'. ` +
-      `Set one in .env.${net} or the shell.`,
-  );
-}
 
 // Auction parameters. Bids and the reserve are Uint<16>; the deposit the
 // contract requires from the organizer is fixed at 50 NIGHT in the constructor.
@@ -242,13 +204,23 @@ describe(`Silent Auction Contract (${network})`, () => {
     // Build, start and sync each wallet in turn (sequential setup also spaces
     // out the private-state store names), then wire up its providers.
     async function bringUp(role: Role): Promise<MidnightWalletProvider> {
-      const w = await MidnightWalletProvider.build(logger, envConfig, resolveSecret(network, role));
+      // ORGANIZER/BIDDER_ONE/BIDDER_TWO alias onto the shared Alice/Bob/Charlie
+      // wallets, so one funded set in the repo-root .env serves every example.
+      const setup = resolveWallet(network, role);
+      const w = await MidnightWalletProvider.build(logger, envConfig, setup.secret, {
+        fastSync: setup.fastSync,
+      });
       await w.start();
       await syncWallet(logger, w.wallet, syncTimeoutMs);
       if (isRemote) {
-        // NIGHT→DUST registration per wallet. Seeds are pre-funded; idempotent.
-        const nightBalance = await waitForFunds(w.wallet, envConfig, false, w.unshieldedKeystore);
-        logger.info(`${role} NIGHT balance on '${network}': ${nightBalance}`);
+        await waitForNightThenDust(
+          logger,
+          w.wallet,
+          w.unshieldedKeystore,
+          envConfig,
+          config.faucet,
+          { label: `${role} (${setup.role})` },
+        );
       }
       return w;
     }

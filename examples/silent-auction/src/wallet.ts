@@ -40,9 +40,12 @@ import {
 import * as Rx from 'rxjs';
 import type { Logger } from 'pino';
 
-export type WalletSecret =
-  | { kind: 'seed'; value: string }
-  | { kind: 'mnemonic'; value: string };
+// The secret and the fast-sync plumbing now live in the shared harness package
+// so all eight examples resolve wallets the same way. Re-exported here so the
+// existing `from './wallet.js'` imports keep working.
+import { assembleWallet, type FastSyncOptions, type WalletSecret } from '@midnight-ntwrk/example-fast-sync';
+
+export type { WalletSecret };
 
 export class MidnightWalletProvider implements MidnightProvider, WalletProvider {
   readonly wallet: WalletFacade;
@@ -103,11 +106,41 @@ export class MidnightWalletProvider implements MidnightProvider, WalletProvider 
     return this.wallet.stop();
   }
 
+  /**
+   * Build an un-started wallet provider.
+   *
+   * Pass `opts.fastSync` to pre-seed the wallet from the shipped reference
+   * bundle so it starts near chain tip instead of walking the chain from
+   * genesis (~75s instead of ~78min on preprod). The safety guard inside only
+   * seeds a wallet whose birthday is at or after the reference height, so
+   * enabling it on a wallet with earlier history falls back to a full sync
+   * rather than hiding that wallet's funds. See FAST-SYNC.md.
+   *
+   * Omit it and this is exactly the normal `FluentWalletBuilder` path.
+   */
   static async build(
     logger: Logger,
     env: EnvironmentConfiguration,
     secret: WalletSecret,
+    opts?: { fastSync?: FastSyncOptions },
   ): Promise<MidnightWalletProvider> {
+    if (opts?.fastSync) {
+      const { facade, zswapSecretKeys, dustSecretKey, keystore } = await assembleWallet(
+        logger,
+        env,
+        secret,
+        opts.fastSync,
+      );
+      logger.info(`Wallet built from ${secret.kind} (fast-sync enabled).`);
+      return new MidnightWalletProvider(
+        logger,
+        facade,
+        zswapSecretKeys,
+        dustSecretKey,
+        keystore,
+      );
+    }
+
     const dustOptions: DustWalletOptions = {
       ledgerParams: LedgerParameters.initialParameters(),
       additionalFeeOverhead: 1_000n,

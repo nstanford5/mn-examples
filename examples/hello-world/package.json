@@ -20,6 +20,7 @@
     "validate": "yarn env:up && yarn test:local; yarn env:down"
   },
   "dependencies": {
+    "@midnight-ntwrk/example-fast-sync": "workspace:^",
     "@midnight-ntwrk/midnight-js-contracts": "4.1.1",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "4.1.1",
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.1.1",

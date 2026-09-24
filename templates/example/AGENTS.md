@@ -30,3 +30,8 @@ yarn env:down
 - The circuit-id union in `src/providers.ts` is derived from the compiled
   contract (`keyof ImpureCircuits`), so it never needs editing when circuits
   change.
+- Remote-network wiring is shared, not copied. `src/wallet.ts` takes an optional
+  `{ fastSync }` and the test resolves its wallet with
+  `resolveWallet(network, role)` from `@midnight-ntwrk/example-fast-sync`. Do not
+  write a per-example seed resolver; the shared one knows every suite's role
+  names and reads the repo-root `.env.<network>`. See `FAST-SYNC.md`.

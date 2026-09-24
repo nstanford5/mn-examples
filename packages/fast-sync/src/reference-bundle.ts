@@ -3,7 +3,7 @@
 // A reference is an empty throwaway wallet synced to chain tip once, then
 // serialized. New wallets restore from it (with their own keys swapped in)
 // instead of walking the chain from genesis — turning a ~78-minute preprod
-// first sync into seconds. See docs/FAST-SYNC.md.
+// first sync into seconds. See FAST-SYNC.md at the repo root.
 //
 // The bundle format matches what moth-wallet's `scripts/export-preseed.mjs`
 // writes: one gzipped serialized state per sub-wallet plus a manifest recording

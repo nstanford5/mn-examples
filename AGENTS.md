@@ -5,7 +5,7 @@ Instructions for AI agents working in this repository. Humans: see `README.md`.
 ## What this repo is
 
 A single monorepo of official Midnight examples. Each lives under `examples/<name>`
-and is a Yarn 4 workspace. The whole repo shares one lockfile and one pinned
+and is a Yarn 4 workspace. Shared harness code lives under `packages/`. The whole repo shares one lockfile and one pinned
 toolchain (see the version matrix in `README.md`). The point of the monorepo is
 that these examples are **verified**: CI compiles every contract and runs its
 test suite against a local Midnight network. Treat green examples as ground
@@ -23,7 +23,16 @@ truth over your own recollection of Midnight/Compact APIs.
   repo-wide pass.
 - **Never commit secrets.** Real `.env.preprod` / `.env.preview` and
   `midnight-level-db/`, `logs/`, wallet preseed state are gitignored. Only the
-  `.env.*.example` templates are tracked.
+  `.env.*.example` templates are tracked. The `preseed/` bundles ARE committed on
+  purpose — they hold public chain state and a public key that gets replaced on
+  restore, no secret.
+- **Never hand-write a `_BIRTHDAY` line in a `.env.<network>`.** It is what
+  authorizes pre-seeding a wallet, and only `yarn wallets:new` — which reads the
+  chain tip as it mints the seed — can state it truthfully. Adding one next to a
+  pre-existing wallet defeats the `isSeedable()` guard and silently hides that
+  wallet's funds. Omitting it is always safe: that wallet just does a full sync.
+- **Remote suites share four wallets** (Alice/Bob/Charlie/Dave, aliased per
+  suite in `packages/fast-sync/src/resolve.ts`). Never run them in parallel.
 
 ## Common commands
 
@@ -37,11 +46,19 @@ yarn workspace @midnight-ntwrk/example-<name> run compile   # one example
 Per example (from `examples/<name>`): `yarn env:up`, `yarn wait:dust`,
 `yarn test:local`, `yarn env:down`. Running tests requires Docker.
 
+Against a remote network (preprod/preview) — see `FAST-SYNC.md`:
+
+```bash
+yarn preseed:cut         # re-cut the pre-seed reference bundle. ALWAYS BEFORE wallets:new
+yarn wallets:new         # mint the 4 shared wallets into a repo-root .env.<network>
+yarn test:preprod        # every suite, sequentially (they share those wallets)
+```
+
 ## Examples
 
 | Example | Teaches |
 |---|---|
-| `hello-world` | Environment smoke test; minimal contract + test harness; fast-sync preseed |
+| `hello-world` | Environment smoke test; minimal contract + test harness; zero-setup fast-sync wallet |
 | `calculator` | Public `ledger` value updated by arithmetic circuits; a `divMod` witness verified on-chain (verify-off-chain-work pattern) |
 | `private-party` | Private on-chain data, access control, unshielded (NIGHT), DUST sponsorship |
 | `battleship` | Compact contract as a state machine, role-based access control, private state, on-chain verification of off-chain data |
@@ -64,6 +81,10 @@ Each example has its own `AGENTS.md` with specifics.
 - Directory shape: `contract/` (singular) with the `.compact` source + `index.ts`
   (+ `witnesses.ts` where needed); `src/` for the TypeScript test harness;
   `scripts/` for helpers; `compose.yml` for the local network.
+- Remote-network wiring is shared, not copied: depend on
+  `@midnight-ntwrk/example-fast-sync` and use its `resolveWallet(network, role)`
+  and `waitForNightThenDust(...)` rather than writing a per-example seed resolver.
+  `vitest.config.ts` loads `.env.<network>` from the REPO ROOT via `loadEnv`.
 - Extend `../../tsconfig.base.json` in the example `tsconfig.json`.
 - Provide `compile`, `test`, `test:local`, `env:up`, `env:down`, `wait:dust`
   scripts so the CI matrix and root aggregates work unchanged.

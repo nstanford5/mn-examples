@@ -26,7 +26,7 @@ import { CustomDustWallet } from '@midnight-ntwrk/wallet-sdk/dust';
 import { createKeystore, PublicKey, UnshieldedWallet } from '@midnight-ntwrk/wallet-sdk/unshielded';
 import { type DustWalletOptions, type EnvironmentConfiguration, WalletSeeds } from '@midnight-ntwrk/testkit-js';
 import type { Logger } from 'pino';
-import type { WalletSecret } from '../wallet.js';
+import type { WalletSecret } from './types.js';
 import { dedupingDustBuilder, dedupingShieldedBuilder } from './dedup.js';
 import { isSeedable, preSeedNewWallet } from './preseed.js';
 import { loadReferenceBundle } from './reference-bundle.js';
@@ -60,6 +60,21 @@ export interface AssembledWallet {
   seeded: string[];
   /** Reference height used, or null when none was applied. */
   referenceHeight: number | null;
+  /**
+   * The three sub-wallets behind the facade. Exposed only so `cut-preseed` can
+   * call `serializeState()` on each to mint a new reference bundle; ordinary
+   * callers should drive the facade.
+   */
+  subWallets: {
+    shielded: SerializableSubWallet;
+    unshielded: SerializableSubWallet;
+    dust: SerializableSubWallet;
+  };
+}
+
+/** The one method the bundle cutter needs off a sub-wallet. */
+export interface SerializableSubWallet {
+  serializeState(): Promise<string>;
 }
 
 /** Read the indexer's current tip height, or undefined if it cannot be reached. */
@@ -184,5 +199,17 @@ export async function assembleWallet(
     logger.info(`Fast-sync: seeded [${seeded.join(', ')}] from reference at height ${referenceHeight} — sub-wallets start near tip.`);
   }
 
-  return { facade, zswapSecretKeys, dustSecretKey, keystore, seeded, referenceHeight };
+  return {
+    facade,
+    zswapSecretKeys,
+    dustSecretKey,
+    keystore,
+    seeded,
+    referenceHeight,
+    subWallets: {
+      shielded: shielded as unknown as SerializableSubWallet,
+      unshielded: unshielded as unknown as SerializableSubWallet,
+      dust: dust as unknown as SerializableSubWallet,
+    },
+  };
 }

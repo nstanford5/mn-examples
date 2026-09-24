@@ -23,14 +23,11 @@ import {
 } from '@midnight-ntwrk/midnight-js-contracts';
 import type { ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import { type EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
+import { resolveWallet, waitForNightThenDust } from '@midnight-ntwrk/example-fast-sync';
 import pino from 'pino';
 
 import { getConfig } from '../config.js';
-import {
-  MidnightWalletProvider,
-  syncWallet,
-  type WalletSecret,
-} from '../wallet.js';
+import { MidnightWalletProvider, syncWallet } from '../wallet.js';
 import { buildProviders, type __Name__Providers } from '../providers.js';
 __PRIVATE_STATE_IMPORT__
 import {
@@ -44,8 +41,6 @@ import {
 // @ts-expect-error WebSocket global assignment for apollo
 globalThis.WebSocket = WebSocket;
 
-const ALICE_LOCAL_SEED =
-  '0000000000000000000000000000000000000000000000000000000000000001';
 const PRIVATE_STATE_ID = 'Alice__Name__State';
 
 const logger = pino({
@@ -54,19 +49,6 @@ const logger = pino({
 });
 
 const network = process.env['MIDNIGHT_NETWORK'] ?? 'local';
-
-// Local uses the pre-funded devnet seed. For a remote network, supply a funded
-// wallet seed via .env.<network> (e.g. MIDNIGHT_PREVIEW_SEED).
-function resolveSecret(net: string): WalletSecret {
-  if (net === 'local') return { kind: 'seed', value: ALICE_LOCAL_SEED };
-  const seed = process.env[`MIDNIGHT_${net.toUpperCase()}_SEED`]?.trim();
-  if (!seed) {
-    throw new Error(
-      `Set MIDNIGHT_${net.toUpperCase()}_SEED in .env.${net} to run against '${net}'.`,
-    );
-  }
-  return { kind: 'seed', value: seed };
-}
 
 describe(`__Title__ Contract (${network})`, () => {
   let wallet: MidnightWalletProvider;
@@ -101,9 +83,28 @@ describe(`__Title__ Contract (${network})`, () => {
       proofServer: config.proofServer,
     };
 
-    wallet = await MidnightWalletProvider.build(logger, envConfig, resolveSecret(network));
+    // Locally this is the genesis-funded Alice seed. On a remote network it is
+    // the shared Alice wallet from the repo-root .env.<network>, fast-syncing
+    // from the reference bundle when a birthday is recorded. Pass a role name
+    // (e.g. resolveWallet(network, 'BOB')) if your suite needs more than one.
+    const setup = resolveWallet(network);
+    wallet = await MidnightWalletProvider.build(logger, envConfig, setup.secret, {
+      fastSync: setup.fastSync,
+    });
     await wallet.start();
     await syncWallet(logger, wallet.wallet, syncTimeoutMs);
+
+    if (isRemote) {
+      // Synced is not funded: a wallet with no DUST fails its first submit.
+      await waitForNightThenDust(
+        logger,
+        wallet.wallet,
+        wallet.unshieldedKeystore,
+        envConfig,
+        config.faucet,
+        { label: setup.role },
+      );
+    }
 
     providers = buildProviders(wallet, zkConfigPath, config);
     logger.info(`Providers initialized on '${network}'. Ready to test!`);

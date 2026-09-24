@@ -47,8 +47,8 @@ import { getConfig } from '../config.js';
 import {
   MidnightWalletProvider,
   syncWallet,
-  type WalletSecret,
 } from '../wallet.js';
+import { resolveWallet, waitForNightThenDust } from '@midnight-ntwrk/example-fast-sync';
 import { buildProviders, type ElectionProviders } from '../providers.js';
 import {
   createElectionPrivateState,
@@ -69,8 +69,6 @@ import {
 // @ts-expect-error WebSocket global assignment for apollo
 globalThis.WebSocket = WebSocket;
 
-const ALICE_LOCAL_SEED =
-  '0000000000000000000000000000000000000000000000000000000000000001';
 
 // Every participant stores their private state under a distinct id, keyed to the
 // deployed contract. The witnesses read whichever id a given call names.
@@ -96,18 +94,6 @@ const logger = pino({
 
 const network = process.env['MIDNIGHT_NETWORK'] ?? 'local';
 
-// Local uses the pre-funded devnet seed. For a remote network, supply a funded
-// wallet seed via .env.<network> (e.g. MIDNIGHT_PREVIEW_SEED).
-function resolveSecret(net: string): WalletSecret {
-  if (net === 'local') return { kind: 'seed', value: ALICE_LOCAL_SEED };
-  const seed = process.env[`MIDNIGHT_${net.toUpperCase()}_SEED`]?.trim();
-  if (!seed) {
-    throw new Error(
-      `Set MIDNIGHT_${net.toUpperCase()}_SEED in .env.${net} to run against '${net}'.`,
-    );
-  }
-  return { kind: 'seed', value: seed };
-}
 
 describe(`Election Contract (${network})`, () => {
   let wallet: MidnightWalletProvider;
@@ -177,9 +163,26 @@ describe(`Election Contract (${network})`, () => {
       proofServer: config.proofServer,
     };
 
-    wallet = await MidnightWalletProvider.build(logger, envConfig, resolveSecret(network));
+    // Alice, fast-syncing from the shipped reference bundle when the root
+    // .env.<network> records a birthday for her. See FAST-SYNC.md.
+    const setup = resolveWallet(network);
+    wallet = await MidnightWalletProvider.build(logger, envConfig, setup.secret, {
+      fastSync: setup.fastSync,
+    });
     await wallet.start();
     await syncWallet(logger, wallet.wallet, syncTimeoutMs);
+
+    if (isRemote) {
+      // Synced is not funded: a wallet with no DUST fails its first submit.
+      await waitForNightThenDust(
+        logger,
+        wallet.wallet,
+        wallet.unshieldedKeystore,
+        envConfig,
+        config.faucet,
+        { label: setup.role },
+      );
+    }
 
     providers = buildProviders(wallet, zkConfigPath, config);
     logger.info(`Providers initialized on '${network}'. Ready to test!`);
