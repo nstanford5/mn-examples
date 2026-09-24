@@ -105,5 +105,7 @@ Each example has its own `AGENTS.md` with specifics.
 - Extend `../../tsconfig.base.json` in the example `tsconfig.json`.
 - Provide `compile`, `test`, `test:local`, `env:up`, `env:down`, `wait:dust`
   scripts so the CI matrix and root aggregates work unchanged.
+- Adding a browser frontend to an example: follow `examples/hello-world/ui/AGENTS.md`
+  (the reference UI pattern: pins, provider swap, verification checklist).
 - Add meticulous comments in contracts and witnesses explaining the *how* and
   *why* — these examples are read by agents as much as by people.
