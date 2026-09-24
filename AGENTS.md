@@ -28,6 +28,14 @@ truth over your own recollection of Midnight/Compact APIs.
   intentional for now: containing Vite 6 to the UI breaks it (see
   `examples/zk-loan/ui/README.md`). Do not "fix" it by pinning Vite 8 at the
   root. The Vite 8 move is a TODO for the next coordinated version pass.
+- **The root `devDependencies` pins `bn.js` 5.2.5 on purpose.** It anchors a
+  single `bn.js@5` at `node_modules/`. Without it, the `zk-loan/ui` browser
+  polyfills (`vite-plugin-node-polyfills` → `crypto-browserify` → `elliptic`,
+  `asn1.js`, …) hoist `bn.js@4` to the root, the wallet SDK's node client and
+  `@polkadot/util` each get a private `bn.js@5` copy, and every transaction
+  submit fails with `SubmissionError` (`blockNumber: Expected BN, actual N`)
+  even though the tx lands, followed by `DustDoubleSpend` on the next one. Do
+  not remove it; `bn.js@4` stays nested under the polyfill packages.
 - **Never commit secrets.** Real `.env.preprod` / `.env.preview` and
   `midnight-level-db/`, `logs/`, wallet preseed state are gitignored. Only the
   `.env.*.example` templates are tracked. The `preseed/` bundles ARE committed on
@@ -76,6 +84,7 @@ yarn test:preprod        # every suite, sequentially (they share those wallets)
 | `election` | TODO: what it teaches |
 | `secret-message` | Private on-chain data via hashing: a witness supplies a secret, the circuit publishes only its `persistentHash` commitment |
 | `zk-loan` | Private credit scoring: an in-circuit Schnorr/Jubjub signature check on a witness-supplied profile, witness-derived identity (no `ownPublicKey()`), nested `Map`s, batched migration |
+| `shielded-chips` | Shielded tokens end to end: a MIP-0011 native shielded token (mint, both burn paths) plus a roulette contract that custodies and pays out coins; commitment-based escrow and `mergeCoin` ordering keep coin nonces (and so wallets) off chain; two contracts wired from one harness |
 
 Each example has its own `AGENTS.md` with specifics.
 

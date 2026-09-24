@@ -968,6 +968,34 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@midnight-ntwrk/example-shielded-chips@workspace:examples/shielded-chips":
+  version: 0.0.0-use.local
+  resolution: "@midnight-ntwrk/example-shielded-chips@workspace:examples/shielded-chips"
+  dependencies:
+    "@midnight-ntwrk/example-fast-sync": "workspace:^"
+    "@midnight-ntwrk/midnight-js-contracts": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-network-id": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-protocol": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-types": "npm:4.1.1"
+    "@midnight-ntwrk/midnight-js-utils": "npm:4.1.1"
+    "@midnight-ntwrk/testkit-js": "npm:4.1.1"
+    "@midnight-ntwrk/wallet-sdk": "npm:1.2.0"
+    "@types/node": "npm:^22.0.0"
+    "@types/ws": "npm:^8.5.9"
+    pino: "npm:^9.0.0"
+    pino-pretty: "npm:^13.0.0"
+    rxjs: "npm:^7.8.2"
+    typescript: "npm:^5.7.0"
+    vite-node: "npm:^6.0.0"
+    vitest: "npm:^4.1.0"
+    ws: "npm:^8.14.2"
+  languageName: unknown
+  linkType: soft
+
 "@midnight-ntwrk/example-silent-auction@workspace:examples/silent-auction":
   version: 0.0.0-use.local
   resolution: "@midnight-ntwrk/example-silent-auction@workspace:examples/silent-auction"
@@ -3801,17 +3829,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"bn.js@npm:5.2.5, bn.js@npm:^5.2.1, bn.js@npm:^5.2.3":
+  version: 5.2.5
+  resolution: "bn.js@npm:5.2.5"
+  checksum: 10c0/4c47bcb261950086a9d5d311bea97197b5950703e0a80caf6e226f3bb049954a864c80b0fca7f70149c74c2e255cb4a63d0da2c425d7b15f9051a042a4e12095
+  languageName: node
+  linkType: hard
+
 "bn.js@npm:^4.0.0, bn.js@npm:^4.1.0, bn.js@npm:^4.11.9":
   version: 4.12.5
   resolution: "bn.js@npm:4.12.5"
   checksum: 10c0/e15e35d0e082fa43c5dd03b552041faf23bc870fbe5de0e41ab5d2d987875f43ffb1f8f57021494e9d71784223c59ddbba1819948b2c2648477a61ab7455aa42
-  languageName: node
-  linkType: hard
-
-"bn.js@npm:^5.2.1, bn.js@npm:^5.2.3":
-  version: 5.2.5
-  resolution: "bn.js@npm:5.2.5"
-  checksum: 10c0/4c47bcb261950086a9d5d311bea97197b5950703e0a80caf6e226f3bb049954a864c80b0fca7f70149c74c2e255cb4a63d0da2c425d7b15f9051a042a4e12095
   languageName: node
   linkType: hard
 
@@ -6322,6 +6350,8 @@ __metadata:
 "mn-examples@workspace:.":
   version: 0.0.0-use.local
   resolution: "mn-examples@workspace:."
+  dependencies:
+    bn.js: "npm:5.2.5"
   languageName: unknown
   linkType: soft
 

@@ -1,0 +1,342 @@
+// Tutorial roulette: RED/BLACK bets with a 2x payout on win.
+//
+// Flow:
+// - Alice (theHouse) pre-deposits matching chip coins via `houseDeposit`.
+//   Each deposit is stored under its own nonce as the map key.
+// - A player bets by sending a chip coin via `betColor`. The contract takes
+//   custody of the coin but records only a *commitment* to it, keyed by the
+//   player's dapp pseudonym.
+// - A winner calls `claimWinnings(matchKey)` once. It reopens their escrow
+//   commitment from private state, merges the escrowed coin with one of
+//   Alice's match coins, and pays the 2x total out in a single coin.
+// - A loser calls `forfeit()`, which moves their escrowed coin into the
+//   house's sweepable pool. Alice then takes it with `houseClaimMatch`,
+//   the same circuit she uses for unused match coins.
+//
+// Equal-denomination invariant:
+// - `betColor` and `houseDeposit` both require the incoming coin's color
+//   to equal `allowedChipColor` (locked in at deploy time).
+// - `claimWinnings` enforces `matchCoin.value == betValues[player]` from
+//   public ledger state, so the 2x math is mechanically guaranteed — no
+//   off-chain trust between Alice and the player needed.
+//
+// Privacy model:
+// - PRIVATE: the player's wallet identity (their Zswap pubkey). The on-chain
+//   pseudonym is `persistentHash(["roulette:pk:", sk])` where `sk` is a
+//   player-supplied witness. An unrelated `sk` is necessary but NOT
+//   sufficient: a pseudonym is only as private as the coins recorded under
+//   it. A coin commitment is a deterministic function of
+//   (nonce, color, value, owner), and so is every coin derived from it, so
+//   ANY coin nonce in public state can be tested against a guessed wallet
+//   key — inbound (who funded it) and outbound (who was paid from it). That
+//   is why no player coin info is stored here; see `betCommits`.
+//   The `"roulette:pk:"` domain separator also prevents linkability to the
+//   same player's identity in other dapps.
+//   RESIDUAL: the chip issuer knows the exact coin it minted to you, so if
+//   you bet that coin whole, the issuer alone can still recognise it. Split
+//   or merge chips in your wallet first (see splitShieldedCoin in
+//   src/wallet.ts) and even the issuer loses the thread.
+// - PRIVATE: the escrowed coin — nonce, and therefore every coin derived
+//   from it, including the payout.
+// - PRIVATE: the winning number, until `revealWinningNumber` runs — only
+//   the hash `commitWithSk(num, sk)` is on chain before the reveal.
+// - PUBLIC: the dapp pseudonym (once a player acts), the bet color
+//   (`bets[pseudo]`), the bet value (`betValues[pseudo]`), the chip color
+//   (`chipColor`), the payout record (`paidWinners`), and every value in
+//   `houseCoins`. An observer can correlate all of a single player's
+//   behavior *within* this contract, and can read what was bet, for how
+//   much, and whether it won — but not who did it.
+//
+// This is a deliberate "identity-private, behavior-public" tradeoff. Hiding
+// the bet value or color as well would mean committing those too and
+// re-proving them on claim.
+
+pragma language_version 0.23;
+import CompactStandardLibrary;
+
+export enum BetState {
+    CLOSED,
+    OPEN
+}
+
+// GREEN is the zero-pocket only; bets are restricted to RED or BLACK.
+export enum Color {
+    GREEN,
+    RED,
+    BLACK
+}
+
+export sealed ledger theHouse: Bytes<32>;
+export sealed ledger chipColor: Bytes<32>;
+export sealed ledger winningNumHash: Bytes<32>;
+export ledger betState: BetState;
+export ledger winningColor: Color;
+export ledger bets: Map<Bytes<32>, Color>;
+// A commitment to the player's escrowed coin — deliberately NOT the coin.
+// Storing the coin (as Map.insertCoin does) would publish its nonce, which is
+// enough to identify both the wallet that funded the bet and the wallet paid
+// out of it. Only the player can reopen this.
+export ledger betCommits: Map<Bytes<32>, Bytes<32>>;
+// The bet size is public by design, and is what claimWinnings checks the
+// house's match coin against. A value alone identifies nobody.
+export ledger betValues: Map<Bytes<32>, Uint<64>>;
+// Players who have been paid, so a win can only be claimed once.
+export ledger paidWinners: Set<Bytes<32>>;
+// Alice's pre-deposited match coins, plus anything losers have forfeited.
+// These are contract-owned coins with contract-derived nonces, so publishing
+// them links nothing back to a wallet.
+export ledger houseCoins: Map<Bytes<32>, QualifiedShieldedCoinInfo>;
+
+witness localSecretKey(): Bytes<32>;
+// The player's blinding factor for their escrow commitment. Keeping this
+// private is what stops the chip issuer — who knows the coin it minted you —
+// from recomputing your commitment and unmasking your pseudonym.
+witness escrowSalt(): Bytes<32>;
+// The escrowed coin, replayed from the player's private state at claim time.
+// The contract cannot look this up: that is the whole point.
+witness escrowedCoin(): QualifiedShieldedCoinInfo;
+
+constructor(_winningNum: Uint<8>, allowedChipColor: Bytes<32>) {
+    assert(_winningNum >= 0 && _winningNum <= 36, "Cheat Detected: theHouse: Please keep the number on the table");
+
+    const _sk = localSecretKey();
+    theHouse = disclose(getDappPublicKey(_sk));
+    chipColor = disclose(allowedChipColor);
+    winningNumHash = commitWithSk(_winningNum as Bytes<32>, _sk);
+    betState = BetState.OPEN;
+}
+
+// Bind an escrowed coin to a player-held salt. mt_index is deliberately left
+// out: it is assigned when the transaction lands, so it is not known here and
+// would make the commitment impossible to reopen.
+circuit escrowCommit(coin: QualifiedShieldedCoinInfo, salt: Bytes<32>): Bytes<32> {
+    return persistentCommit<Vector<3, Bytes<32>>>(
+        [coin.nonce, coin.color, coin.value as Bytes<32>],
+        salt
+    );
+}
+
+// Take custody of an incoming coin and hand back an equivalent coin that the
+// *contract* owns under a freshly derived nonce, safe to record publicly.
+// The caller must have already called receiveShielded on `coin`.
+circuit reNonceToSelf(coin: ShieldedCoinInfo): ShieldedCoinInfo {
+    const qualified = QualifiedShieldedCoinInfo {
+        nonce: coin.nonce,
+        color: coin.color,
+        value: coin.value,
+        mt_index: 0 as Uint<64>
+    };
+    const result = sendShielded(
+        disclose(qualified),
+        right<ZswapCoinPublicKey, ContractAddress>(kernel.self()),
+        disclose(coin.value) as Uint<128>
+    );
+    return result.sent;
+}
+
+// Alice deposits a chip coin to back a future bet. Key = the re-nonced coin's
+// nonce, which is unique but is no longer one of Alice's wallet coins.
+export circuit houseDeposit(coin: ShieldedCoinInfo): [] {
+    const _sk = localSecretKey();
+    assert(getDappPublicKey(_sk) == theHouse, "Only the house can deposit match funds");
+    assert(coin.color == chipColor, "Deposit must be made with roulette chips");
+
+    // `disclose` here does not publish the coin — it acknowledges that the coin
+    // flows into a public *effect* (the zswap offer). What actually reaches the
+    // ledger is whatever gets written below, which is why the re-nonce matters.
+    receiveShielded(disclose(coin));
+    const escrowed = reNonceToSelf(coin);
+    // .insertCoin transforms ShieldedCoinInfo into QualifiedShieldedCoinInfo
+    houseCoins.insertCoin(
+        disclose(escrowed.nonce),
+        disclose(escrowed),
+        right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+    );
+}
+
+export circuit betColor(coin: ShieldedCoinInfo, colorBet: Color): [] {
+    assert(betState == BetState.OPEN, "Not ready to accept bets yet");
+    assert(colorBet == Color.RED || colorBet == Color.BLACK, "Only RED or BLACK bets are allowed");
+
+    const _sk = localSecretKey();
+    const player = getDappPublicKey(_sk);
+    assert(player != theHouse, "theHouse cannot make bets");
+
+    const pubPlayer = disclose(player);
+    assert(!betCommits.member(pubPlayer), "Already placed a bet this round");
+    assert(disclose(coin.color) == chipColor, "Bet must be made with roulette chips");
+
+    receiveShielded(disclose(coin));
+
+    // The coin is now in the contract's custody, but nothing that identifies
+    // it reaches the chain — only a commitment the player can reopen later.
+    // Note there is no insertCoin call here: that is the fix.
+    const q = QualifiedShieldedCoinInfo {
+        nonce: coin.nonce,
+        color: coin.color,
+        value: coin.value,
+        mt_index: 0 as Uint<64>
+    };
+    betCommits.insert(pubPlayer, disclose(escrowCommit(q, escrowSalt())));
+    betValues.insert(pubPlayer, disclose(coin.value) as Uint<64>);
+    bets.insert(pubPlayer, disclose(colorBet));
+}
+
+export circuit revealWinningNumber(winningNum: Uint<8>): [] {
+    const _sk = localSecretKey();
+    assert(getDappPublicKey(_sk) == theHouse, "Only the House can reveal the number");
+
+    const hash = commitWithSk(winningNum as Bytes<32>, _sk);
+    assert(hash == winningNumHash, "Cheat Detected: theHouse: tried to change the winning number");
+
+    betState = BetState.CLOSED;
+    winningColor = getColor(disclose(winningNum));
+}
+
+// A winner takes their 2x in one call.
+//
+// PRIVACY: mergeCoin derives the merged coin's nonce from its FIRST input
+// only, so passing the player's secret escrow coin first means the payout coin
+// inherits a nonce nobody can recompute. Merging the other way round — house
+// coin first — would derive it from a nonce that is sitting in public state,
+// and an observer could then confirm which wallet was paid.
+export circuit claimWinnings(matchKey: Bytes<32>): [] {
+    assert(betState == BetState.CLOSED, "Winning number has not been revealed");
+
+    const _sk = localSecretKey();
+    const player = disclose(getDappPublicKey(_sk));
+
+    assert(bets.member(player), "You did not place a bet");
+    assert(bets.lookup(player) == winningColor, "You did not place a winning bet");
+    assert(!paidWinners.member(player), "Already claimed");
+
+    // Reopen the escrow commitment from private state.
+    const coin = escrowedCoin();
+    assert(betCommits.lookup(player) == disclose(escrowCommit(coin, escrowSalt())),
+           "Escrowed coin does not match your commitment");
+
+    assert(houseCoins.member(disclose(matchKey)), "Match coin not available");
+    const matchCoin = houseCoins.lookup(disclose(matchKey));
+    assert(matchCoin.value == betValues.lookup(player) as Uint<128>,
+           "Match coin must equal your bet value");
+
+    const merged = mergeCoin(disclose(coin), matchCoin);
+    const mergedQ = QualifiedShieldedCoinInfo {
+        nonce: merged.nonce,
+        color: merged.color,
+        value: merged.value,
+        mt_index: 0 as Uint<64>
+    };
+    sendShielded(
+        mergedQ,
+        left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey()),
+        merged.value as Uint<128>
+    );
+
+    houseCoins.remove(disclose(matchKey));
+    betCommits.remove(player);
+    betValues.remove(player);
+    paidWinners.insert(player);
+}
+
+// A loser hands their escrowed coin over to the house's pool. Only the player
+// can do this, because only the player can reopen the escrow commitment — the
+// price of keeping the escrowed coin out of public state.
+export circuit forfeit(): [] {
+    assert(betState == BetState.CLOSED, "Winning number has not been revealed");
+
+    const _sk = localSecretKey();
+    const player = disclose(getDappPublicKey(_sk));
+
+    assert(bets.member(player), "You did not place a bet");
+    assert(bets.lookup(player) != winningColor, "You won — claim instead");
+    assert(betCommits.member(player), "Nothing to forfeit");
+
+    const coin = escrowedCoin();
+    assert(betCommits.lookup(player) == disclose(escrowCommit(coin, escrowSalt())),
+           "Escrowed coin does not match your commitment");
+
+    // Re-nonce on the way into the public pool so the coin Alice later sweeps
+    // is not the coin that was in the player's wallet.
+    const result = sendShielded(
+        disclose(coin),
+        right<ZswapCoinPublicKey, ContractAddress>(kernel.self()),
+        disclose(coin.value) as Uint<128>
+    );
+    houseCoins.insertCoin(
+        disclose(result.sent.nonce),
+        disclose(result.sent),
+        right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+    );
+
+    betCommits.remove(player);
+    betValues.remove(player);
+}
+
+// Alice sweeps an unconsumed match coin — or a forfeited bet — back to her
+// wallet. Both live in houseCoins and are contract-owned, so this is a plain
+// one-coin send.
+export circuit houseClaimMatch(matchKey: Bytes<32>): [] {
+    const _sk = localSecretKey();
+    assert(getDappPublicKey(_sk) == theHouse, "Only the house can sweep");
+
+    assert(houseCoins.member(disclose(matchKey)), "Match coin not available");
+
+    const coin = houseCoins.lookup(disclose(matchKey));
+    sendShielded(
+        coin,
+        left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey()),
+        coin.value as Uint<128>
+    );
+    houseCoins.remove(disclose(matchKey));
+}
+
+// Standard single-zero roulette wheel: odd numbers are RED, even are BLACK,
+// and zero is GREEN.
+circuit getOdd(num: Uint<8>): Boolean {
+    if (
+        num == 1 ||
+        num == 3 ||
+        num == 5 ||
+        num == 7 ||
+        num == 9 ||
+        num == 11 ||
+        num == 13 ||
+        num == 15 ||
+        num == 17 ||
+        num == 19 ||
+        num == 21 ||
+        num == 23 ||
+        num == 25 ||
+        num == 27 ||
+        num == 29 ||
+        num == 31 ||
+        num == 33 ||
+        num == 35
+    ) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+circuit getColor(num: Uint<8>): Color {
+    if (num == 0) {
+        return Color.GREEN;
+    }
+    if (getOdd(num) == true) {
+        return Color.RED;
+    } else {
+        return Color.BLACK;
+    }
+}
+
+// hash a publicKey specific to this DApp so that users cannot be tracked
+// across DApps. The _secret should be a high-entropy 32-byte value.
+circuit getDappPublicKey(_secret: Bytes<32>): Bytes<32> {
+    return persistentHash<Vector<2, Bytes<32>>>([pad(32, "roulette:pk:"), _secret]);
+}
+
+circuit commitWithSk(_winningNum: Bytes<32>, _sk: Bytes<32>): Bytes<32> {
+    return disclose(persistentHash<Vector<2, Bytes<32>>>([_winningNum, _sk]));
+}

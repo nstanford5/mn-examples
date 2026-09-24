@@ -22,6 +22,9 @@
     "test:preprod": "yarn workspaces foreach --all --verbose run test:preprod",
     "test:preview": "yarn workspaces foreach --all --verbose run test:preview"
   },
+  "devDependencies": {
+    "bn.js": "5.2.5"
+  },
   "resolutions": {
     "@midnight-ntwrk/wallet-sdk": "1.2.0",
     "@midnight-ntwrk/ledger-v8": "8.1.2",
