@@ -15,7 +15,7 @@ who copies it gets working code.
 ```
 mn-examples/
 ├── examples/
-│   ├── hello-world/      # environment smoke test + minimal contract/test suite
+│   ├── hello-world/      # environment smoke test + minimal contract/test suite + browser UI (ui/)
 │   ├── calculator/       # public ledger value + arithmetic circuits + a divMod witness
 │   ├── private-party/    # private on-chain data, access control, DUST sponsorship
 │   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens

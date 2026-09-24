@@ -17,6 +17,8 @@ dist/
 # NOTE: the .compact SOURCE files are committed on purpose — do not ignore them.
 **/contract/managed/
 **/contracts/managed/
+# ZK keys/zkir copied into a UI's public/ by its copy:zk script
+**/ui/public/managed/
 
 # Local runtime state and secrets (never commit real env files)
 **/logs/
