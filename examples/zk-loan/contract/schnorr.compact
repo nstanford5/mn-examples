@@ -1,0 +1,117 @@
+// This file is part of example-zk-loan.
+// Copyright (C) Midnight Foundation
+// SPDX-License-Identifier: Apache-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// You may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Schnorr signature verification polyfill for the Jubjub curve.
+//
+// Ported from midnightntwrk/example-zkloan (contract/src/schnorr.compact).
+// Temporary: to be replaced by a standard-library Schnorr verifier once one
+// ships in a Compact compiler release.
+//
+// This file is a MODULE, not a contract: it has no pragma/ledger of its own and
+// is pulled into zk-loan.compact with `import "schnorr" prefix Schnorr_;`.
+//
+// Scheme (all points on Jubjub, G = generator, pk = sk*G):
+//   sign:   R = k*G, c = H(R, pk, msg) mod 2^248, s = k + c*sk (mod Jubjub order)
+//   verify: s*G == R + c*pk
+//
+// Note: JubjubPoint is opaque in Compact — read coordinates with
+// jubjubPointX/jubjubPointY (not .x/.y), and compare points coordinate-wise.
+
+module schnorr {
+  import CompactStandardLibrary;
+
+  export struct SchnorrSignature {
+    announcement: JubjubPoint;  // R
+    response: Field;            // s
+  }
+
+  // Everything the challenge hash commits to. Hashing the public key and the
+  // announcement (not just the message) prevents key-substitution attacks.
+  struct SchnorrHashInput<#n> {
+    ann_x: Field;
+    ann_y: Field;
+    pk_x: Field;
+    pk_y: Field;
+    msg: Vector<n, Field>;
+  }
+
+  // The witness provides the quotient and remainder of dividing the challenge
+  // hash by 2^248, so it can be truncated to fit in Jubjub's scalar field.
+  // Division is cheap off-chain and expensive in-circuit; the circuit only
+  // CHECKS the result. The quotient is Uint<7> (not Field) so the check below
+  // holds over the integers rather than modulo the field prime — see the range
+  // assert in schnorrVerify.
+  witness getSchnorrReduction(challengeHash: Field): [Uint<7>, Uint<248>];
+
+  export circuit schnorrVerify<#n>(
+                   msg: Vector<n, Field>,
+                   signature: SchnorrSignature,
+                   pk: JubjubPoint
+                   ): [] {
+    const {announcement, response} = signature;
+    const cFull: Field =
+            transientHash<SchnorrHashInput<n>>(
+              SchnorrHashInput<n> { ann_x: jubjubPointX(announcement),
+                                    ann_y: jubjubPointY(announcement),
+                                    pk_x: jubjubPointX(pk),
+                                    pk_y: jubjubPointY(pk),
+                                    msg: msg }
+              );
+    // Truncate the challenge to 248 bits via witness-assisted division by 2^248.
+    // The witness provides (quotient, remainder) such that cFull == q * 2^248 + r
+    // where r : Uint<248>, guaranteeing r < 2^248 < Jubjub subgroup order.
+    // This is needed because ecMul requires scalars < JUBJUB_ORDER (~2^252.4),
+    // but transientHash returns values in BLS12-381's scalar field (~2^255).
+    const TWO_248: Field =
+            452312848583266388373324160190187140051835877600158453279131187530910662656 as Field;
+    const [q, cTruncated] = getSchnorrReduction(cFull);
+    // Bound the quotient so the reduction equation holds over the integers, not
+    // modulo the field prime. Without this, q : Field is unconstrained and a
+    // prover could pick any cTruncated (i.e. any challenge) and solve for a
+    // matching q, forging the signature. floor((BLS12-381 scalar prime - 1) / 2^248)
+    // == 115, so an honest quotient is always in [0, 115]. The zk-loan
+    // simulator test "rejects a forged attestation ..." is the regression test.
+    assert(disclose(q) < 116, "Schnorr quotient out of range");
+    assert(disclose(q) * TWO_248 + (disclose(cTruncated) as Field) == cFull,
+           "Invalid challenge reduction"
+           );
+    const c: Field = disclose(cTruncated) as Field;
+    // s*G == R + c*pk
+    const lhs: JubjubPoint = ecMulGenerator(response);
+    const rhs: JubjubPoint = ecAdd(announcement, ecMul(pk, c));
+    // Compare coordinates, not the points: `==` on the opaque JubjubPoint
+    // compiles to JS reference equality.
+    assert(jubjubPointX(lhs) == jubjubPointX(rhs) && jubjubPointY(lhs) == jubjubPointY(rhs),
+           "Invalid attestation signature");
+  }
+
+  // Pure helper exposing the challenge hash to TypeScript (via the re-export in
+  // zk-loan.compact) so off-chain signers compute exactly what the circuit does.
+  export pure circuit schnorrChallenge(
+                        ann_x: Field,
+                        ann_y: Field,
+                        pk_x: Field,
+                        pk_y: Field,
+                        msg: Vector<4, Field>
+                        ): Field {
+    const cFull: Field =
+            transientHash<SchnorrHashInput<4>>(
+              SchnorrHashInput<4> { ann_x: ann_x, ann_y: ann_y, pk_x: pk_x, pk_y: pk_y, msg: msg }
+              );
+    // Return the full hash. Callers must truncate to 248 bits (mod 2^248) to
+    // match schnorrVerify's challenge reduction.
+    return cFull;
+  }
+}

@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [hello-world, private-party, battleship, calculator, token-transfers, silent-auction, ke-example, jay-example, election, secret-message]
+        example: [hello-world, private-party, battleship, calculator, token-transfers, silent-auction, ke-example, jay-example, election, secret-message, zk-loan]
     defaults:
       run:
         working-directory: examples/${{ matrix.example }}

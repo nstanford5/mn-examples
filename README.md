@@ -22,6 +22,7 @@ mn-examples/
 │   ├── silent-auction/   # sealed reserve price (commit-reveal), NFT auction state machine
 │   ├── election/   # TODO: one-line description
 │   ├── secret-message/   # private message: publish a hash commitment, not the plaintext
+│   ├── zk-loan/   # private credit scoring: verify a signed attestation in-circuit, disclose only the outcome
 │   └── battleship/       # Compact contract as a state machine, RBAC, private state
 ├── packages/
 │   └── fast-sync/        # shared remote-network wallet harness (pre-seed, .env, funding gate)

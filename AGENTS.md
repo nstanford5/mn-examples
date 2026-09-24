@@ -21,6 +21,13 @@ truth over your own recollection of Midnight/Compact APIs.
 - **Keep the toolchain pinned.** Do not bump `@midnight-ntwrk/*`, the compiler,
   Node, or Yarn versions for a single example. Version moves are a coordinated
   repo-wide pass.
+- **The hoisted `vite` is 6.x, set by `examples/zk-loan/ui`.** That UI uses
+  upstream's Vite 6 toolchain, and Yarn hoists it to the root, so every
+  example's `vitest.config.ts` gets Vite 6.4.3 for its bare `import { loadEnv }
+  from 'vite'`. vitest itself still runs on its own nested Vite 8. This is
+  intentional for now: containing Vite 6 to the UI breaks it (see
+  `examples/zk-loan/ui/README.md`). Do not "fix" it by pinning Vite 8 at the
+  root. The Vite 8 move is a TODO for the next coordinated version pass.
 - **Never commit secrets.** Real `.env.preprod` / `.env.preview` and
   `midnight-level-db/`, `logs/`, wallet preseed state are gitignored. Only the
   `.env.*.example` templates are tracked. The `preseed/` bundles ARE committed on
@@ -68,6 +75,7 @@ yarn test:preprod        # every suite, sequentially (they share those wallets)
 | `jay-example` | TODO: what it teaches |
 | `election` | TODO: what it teaches |
 | `secret-message` | Private on-chain data via hashing: a witness supplies a secret, the circuit publishes only its `persistentHash` commitment |
+| `zk-loan` | Private credit scoring: an in-circuit Schnorr/Jubjub signature check on a witness-supplied profile, witness-derived identity (no `ownPublicKey()`), nested `Map`s, batched migration |
 
 Each example has its own `AGENTS.md` with specifics.
 

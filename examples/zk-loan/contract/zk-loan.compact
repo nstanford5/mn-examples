@@ -1,0 +1,341 @@
+// This file is part of example-zk-loan.
+// Copyright (C) Midnight Foundation
+// SPDX-License-Identifier: Apache-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// You may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// ZK Loan — a privacy-preserving credit scorer.
+//
+// Ported from midnightntwrk/example-zkloan (contract/src/zkloan-credit-scorer.compact).
+//
+// The applicant's credit profile (score, income, tenure) never leaves their
+// machine. It is supplied by a witness, checked against an off-chain
+// attestation signed by a registered provider (Schnorr on Jubjub, verified
+// IN-CIRCUIT by schnorr.compact), and run through the tier rules inside the ZK
+// proof. Only the OUTCOME — loan status and authorized amount — is disclosed
+// to the public ledger.
+//
+// Identity is witness-derived throughout. Every browser/CLI instance holds a
+// single 32-byte `userSecretKey` in private state; both the admin role and the
+// per-user loan identity are domain-separated hashes of it. `ownPublicKey()` is
+// never used: it returns a prover-claimed value with no cryptographic binding
+// to the transaction signer, so any assertion that depends on it is bypassable.
+
+pragma language_version 0.23;
+import CompactStandardLibrary;
+
+// schnorr.compact sits next to this file; `prefix Schnorr_` namespaces every
+// exported name (Schnorr_schnorrVerify, Schnorr_SchnorrSignature, ...).
+import "schnorr" prefix Schnorr_;
+
+// Re-export the signature struct so it appears in the generated TypeScript
+// types — the witness returns one and the tests construct them.
+export { Schnorr_SchnorrSignature };
+
+// Enum values are serialized as their index: Approved=0, Rejected=1,
+// Proposed=2, NotAccepted=3. Tests compare against these numbers.
+export enum LoanStatus {
+    Approved,      // approved outright, or accepted after a Proposed offer
+    Rejected,      // applicant did not meet minimum tier eligibility
+    Proposed,      // request exceeded the eligible tier — awaiting the user's decision
+    NotAccepted,   // user declined a Proposed offer
+}
+
+// The only per-loan data that ever reaches the ledger.
+export struct LoanApplication {
+    authorizedAmount: Uint<16>;
+    status: LoanStatus;
+}
+
+// The private credit profile. Not exported: it only ever flows from the
+// witness into `evaluateApplicant` and is never written to the ledger.
+struct Applicant {
+    creditScore: Uint<16>;
+    monthlyIncome: Uint<16>;
+    monthsAsCustomer: Uint<16>;
+}
+
+// Distinct nominal types over Bytes<32> so a user key cannot be passed where an
+// admin key is expected (and vice versa) without an explicit cast.
+export new type UserSecretKey = Bytes<32>;
+export new type UserPublicKey = Bytes<32>;
+export new type AdminPublicKey = Bytes<32>;
+
+// The deployer becomes admin: their derived admin public key (NOT their secret)
+// is pinned on-chain. `disclose` is required because the value is derived from
+// witness data and is being written to public state.
+constructor() {
+    contractAdmin = disclose(deriveAdminPublicKey(getUserSecret()));
+}
+
+// Derived user public keys that may not request/respond/change PIN.
+export ledger blacklist: Set<UserPublicKey>;
+// Derived user public key -> (loanId -> loan). Loan ids start at 1.
+export ledger loans: Map<Bytes<32>, Map<Uint<16>, LoanApplication>>;
+// Old user public key -> last source loanId already migrated by `changePin`.
+// Presence of a key means a migration is in progress for that identity.
+export ledger onGoingPinMigration: Map<Bytes<32>, Uint<16>>;
+// Derived admin public key. Rotatable via `rotateAdmin`.
+export ledger contractAdmin: AdminPublicKey;
+// Registered attestation providers: providerId -> Jubjub public key.
+export ledger providers: Map<Uint<16>, JubjubPoint>;
+
+// Witnesses run off-chain on the prover. Their outputs are UNTRUSTED inputs to
+// the circuit: every value is either verified (the Schnorr signature over the
+// profile) or only used through a hash whose preimage must be known (the secret).
+witness getAttestedScoringWitness(): [Applicant, Schnorr_SchnorrSignature, Uint<16>];
+witness getUserSecret(): UserSecretKey;
+
+// Per-user identity, PIN-rotatable. Changing the PIN yields a new derived
+// public key, breaking linkability to the old identity. Used as the loan map
+// key and the blacklist key. `pure` so the same derivation is exported to
+// TypeScript (`pureCircuits.deriveUserPublicKey`) for off-chain lookups.
+// The string literal is a domain separator: it keeps this hash from ever
+// colliding with `deriveAdminPublicKey` for the same secret.
+export pure circuit deriveUserPublicKey(sk: UserSecretKey, pin: Uint<16>): UserPublicKey {
+    const pinBytes = persistentHash<Uint<16>>(pin);
+    return persistentHash<[Bytes<17>, Bytes<32>, UserSecretKey]>([
+        "zkloan:user:pk:v1",
+        pinBytes,
+        sk
+    ]) as UserPublicKey;
+}
+
+// Admin identity. No PIN binding — the admin role is stable across the admin's
+// PIN rotations. The deployer's `deriveAdminPublicKey(secret)` is frozen into
+// `contractAdmin` at construction.
+export pure circuit deriveAdminPublicKey(sk: UserSecretKey): AdminPublicKey {
+    return persistentHash<[Bytes<18>, UserSecretKey]>([
+        "zkloan:admin:pk:v1",
+        sk
+    ]) as AdminPublicKey;
+}
+
+// Entry point. Derives the caller's identity, checks it is allowed to borrow,
+// runs the private evaluation, and records only the outcome.
+export circuit requestLoan(amountRequested: Uint<16>, secretPin: Uint<16>): [] {
+    assert(amountRequested > 0, "Loan amount must be greater than zero");
+    const requesterPubKey = deriveUserPublicKey(getUserSecret(), secretPin);
+    // The derived key is the public loan-map key, so it must be disclosed. The
+    // PIN and secret stay private: only their hash is revealed.
+    const disclosedRequesterPubKey = disclose(requesterPubKey);
+    assert(!blacklist.member(disclosedRequesterPubKey), "Requester is blacklisted");
+    assert(!onGoingPinMigration.member(disclosedRequesterPubKey as Bytes<32>),
+           "PIN migration is in progress for this user");
+    // The attestation is signed over this hash, binding it to ONE identity:
+    // a signature issued to someone else fails verification (anti-replay).
+    const userPubKeyHash = transientHash<Bytes<32>>(disclosedRequesterPubKey as Bytes<32>);
+    const [topTierAmount, status] = evaluateApplicant(userPubKeyHash);
+    // Only the tier outcome is disclosed — never the score/income/tenure.
+    const disclosedTopTierAmount = disclose(topTierAmount);
+    const disclosedStatus = disclose(status);
+    createLoan(disclosedRequesterPubKey as Bytes<32>, amountRequested, disclosedTopTierAmount, disclosedStatus);
+}
+
+// Resolve a Proposed loan. Only the owner — whose secret + PIN derive to the
+// loan's map key — can find it, so no separate ownership check is needed.
+export circuit respondToLoan(loanId: Uint<16>, secretPin: Uint<16>, accept: Boolean): [] {
+    const requesterPubKey = deriveUserPublicKey(getUserSecret(), secretPin);
+    const disclosedRequesterPubKey = disclose(requesterPubKey);
+    const disclosedPubKey = disclosedRequesterPubKey as Bytes<32>;
+    const disclosedLoanId = disclose(loanId);
+
+    assert(!blacklist.member(disclosedRequesterPubKey), "User is blacklisted");
+    assert(loans.member(disclosedPubKey), "No loans found for this user");
+    assert(loans.lookup(disclosedPubKey).member(disclosedLoanId), "Loan not found");
+
+    const existingLoan = loans.lookup(disclosedPubKey).lookup(disclosedLoanId);
+    assert(existingLoan.status == LoanStatus.Proposed, "Loan is not in Proposed status");
+
+    // Accept keeps the proposed (capped) amount; decline zeroes it.
+    const updatedLoan = accept
+        ? LoanApplication { authorizedAmount: existingLoan.authorizedAmount, status: LoanStatus.Approved }
+        : LoanApplication { authorizedAmount: 0, status: LoanStatus.NotAccepted };
+
+    loans.lookup(disclosedPubKey).insert(disclosedLoanId, disclose(updatedLoan));
+}
+
+// Private credit evaluation. Not exported: it only runs as part of
+// `requestLoan`'s proof. The witness profile is trusted ONLY after the
+// provider's signature over it has been verified in-circuit.
+circuit evaluateApplicant(userPubKeyHash: Field): [Uint<16>, LoanStatus] {
+    const [profile, signature, providerId] = getAttestedScoringWitness();
+
+    // The provider must be registered on-chain by the admin. Disclosing the id
+    // reveals WHICH provider attested, but nothing about the profile.
+    assert(providers.member(disclose(providerId)), "Attestation provider not registered");
+    const providerPk = providers.lookup(disclose(providerId));
+
+    // Signed message: [creditScore, monthlyIncome, monthsAsCustomer, userPubKeyHash].
+    // Must match, element for element, what the provider signed off-chain.
+    const msg: Vector<4, Field> = [
+        profile.creditScore as Field,
+        profile.monthlyIncome as Field,
+        profile.monthsAsCustomer as Field,
+        userPubKeyHash
+    ];
+
+    // Fails the whole transaction if the signature is not valid for this
+    // provider over this exact message — so a tampered profile cannot pass.
+    Schnorr_schnorrVerify<4>(msg, signature, providerPk);
+
+    // Tier 1: best applicants, max 10,000
+    if (profile.creditScore >= 700 && profile.monthlyIncome >= 2000 && profile.monthsAsCustomer >= 24) {
+        return [10000, LoanStatus.Approved];
+    }
+    // Tier 2: good applicants, max 7,000
+    else if (profile.creditScore >= 600 && profile.monthlyIncome >= 1500) {
+        return [7000, LoanStatus.Approved];
+    }
+    // Tier 3: basic eligibility, max 3,000
+    else if (profile.creditScore >= 580) {
+        return [3000, LoanStatus.Approved];
+    }
+    // None of the above: rejected.
+    else {
+        return [0, LoanStatus.Rejected];
+    }
+}
+
+// Writes the loan record. All arguments are already disclosed by the caller.
+circuit createLoan(requester: Bytes<32>, amountRequested: Uint<16>, topTierAmount: Uint<16>, status: LoanStatus): [] {
+    const authorizedAmount = amountRequested > topTierAmount ? topTierAmount : amountRequested;
+
+    // Final status:
+    // - Rejected (not eligible) stays Rejected
+    // - Approved and requested <= eligible stays Approved
+    // - Approved but requested > eligible becomes Proposed (user must accept the lower amount)
+    const finalStatus = status == LoanStatus.Rejected
+        ? LoanStatus.Rejected
+        : (amountRequested > topTierAmount ? LoanStatus.Proposed : LoanStatus.Approved);
+
+    const loan = LoanApplication {
+        authorizedAmount: authorizedAmount,
+        status: finalStatus,
+    };
+    // Nested ADTs must be initialized before use: insert an empty inner map the
+    // first time this identity borrows.
+    if (!loans.member(requester)) {
+        loans.insert(requester, default<Map<Uint<16>, LoanApplication>>);
+    }
+    // Auto-incrementing loan id = current count + 1 (ids start at 1). The
+    // assert keeps the cast to Uint<16> from overflowing.
+    const totalLoans = loans.lookup(requester).size();
+    assert(totalLoans < 65535, "Maximum number of loans reached");
+    const loanNumber = (totalLoans + 1) as Uint<16>;
+    loans.lookup(requester).insert(loanNumber, disclose(loan));
+}
+
+// ---------------------------------------------------------------------------
+// Admin circuits. Each proves, inside the ZK circuit, that the caller knows the
+// preimage of `contractAdmin`. Anyone can read `contractAdmin` off the ledger,
+// but only the holder of the secret can satisfy the equality.
+// ---------------------------------------------------------------------------
+
+export circuit blacklistUser(account: UserPublicKey): [] {
+    assert(contractAdmin == deriveAdminPublicKey(getUserSecret()), "Only admin can blacklist users");
+    blacklist.insert(disclose(account));
+}
+
+export circuit removeBlacklistUser(account: UserPublicKey): [] {
+    assert(contractAdmin == deriveAdminPublicKey(getUserSecret()), "Only admin can remove from blacklist");
+    blacklist.remove(disclose(account));
+}
+
+export circuit registerProvider(providerId: Uint<16>, providerPk: JubjubPoint): [] {
+    assert(contractAdmin == deriveAdminPublicKey(getUserSecret()), "Only admin can register providers");
+    providers.insert(disclose(providerId), disclose(providerPk));
+}
+
+export circuit removeProvider(providerId: Uint<16>): [] {
+    assert(contractAdmin == deriveAdminPublicKey(getUserSecret()), "Only admin can remove providers");
+    assert(providers.member(disclose(providerId)), "Provider not found");
+    providers.remove(disclose(providerId));
+}
+
+// Hand the admin role to a new derived public key. The caller proves they hold
+// the current admin secret; the new admin is passed in as a PUBLIC key the next
+// admin already controls (they compute it off-chain with
+// `pureCircuits.deriveAdminPublicKey`). No private key ever leaves either party.
+export circuit rotateAdmin(newAdmin: AdminPublicKey): [] {
+    assert(contractAdmin == deriveAdminPublicKey(getUserSecret()), "Only admin can rotate admin role");
+    contractAdmin = disclose(newAdmin);
+}
+
+// Move a user's loans from the identity derived with `oldPin` to the one
+// derived with `newPin`. Circuits cannot loop over a variable-length
+// collection, so this migrates a FIXED batch of up to 5 loans per call; the
+// DApp calls it repeatedly until `onGoingPinMigration` no longer holds the old
+// key. While a migration is in progress, `requestLoan` with the old PIN is
+// blocked so no new loans land behind the migration cursor.
+export circuit changePin(oldPin: Uint<16>, newPin: Uint<16>): [] {
+    const oldUserPk = deriveUserPublicKey(getUserSecret(), oldPin);
+    const newUserPk = deriveUserPublicKey(getUserSecret(), newPin);
+    const disclosedOldUserPk = disclose(oldUserPk);
+    const disclosedNewUserPk = disclose(newUserPk);
+
+    assert(!blacklist.member(disclosedOldUserPk), "User is blacklisted");
+    assert(oldPin != newPin, "New PIN must be different from old PIN");
+
+    const disclosedOldPk = disclosedOldUserPk as Bytes<32>;
+    const disclosedNewPk = disclosedNewUserPk as Bytes<32>;
+
+    assert(loans.member(disclosedOldPk), "Old PIN does not match any user");
+
+    // First batch: start the cursor at 0 and make sure the destination exists.
+    if (!onGoingPinMigration.member(disclosedOldPk)) {
+        onGoingPinMigration.insert(disclosedOldPk, 0);
+    }
+    if (!loans.member(disclosedNewPk)) {
+        loans.insert(disclosedNewPk, default<Map<Uint<16>, LoanApplication>>);
+    }
+
+    // Migrated loans are appended after any loans the new identity already has.
+    const lastMigratedSourceId: Uint<16> = onGoingPinMigration.lookup(disclosedOldPk);
+    const lastDestinationId: Uint<16> = loans.lookup(disclosedNewPk).size() as Uint<16>;
+
+    // Process up to 5 loans per transaction. The bound is a compile-time
+    // constant, so the loop is unrolled into the circuit.
+    for (const i of 0..5) {
+        // The migration may have completed in an earlier iteration of this loop.
+        if (onGoingPinMigration.member(disclosedOldPk)) {
+            const sourceId = (lastMigratedSourceId + i + 1) as Uint<16>;
+            const destinationId = (lastDestinationId + i + 1) as Uint<16>;
+
+            if (loans.lookup(disclosedOldPk).member(sourceId)) {
+                // Move the loan and advance the cursor.
+                const loan = loans.lookup(disclosedOldPk).lookup(sourceId);
+                loans.lookup(disclosedNewPk).insert(destinationId, disclose(loan));
+                loans.lookup(disclosedOldPk).remove(sourceId);
+                onGoingPinMigration.insert(disclosedOldPk, sourceId);
+            } else {
+                // No more loans: clear the migration flag and drop the empty
+                // old identity entirely.
+                onGoingPinMigration.remove(disclosedOldPk);
+                if (loans.lookup(disclosedOldPk).size() == 0) {
+                    loans.remove(disclosedOldPk);
+                }
+            }
+        }
+    }
+}
+
+// Re-export schnorrChallenge from the schnorr module so it is available in the
+// generated TypeScript `pureCircuits` — the off-chain signer (see
+// src/test/utils/test-data.ts) must compute the exact same challenge hash.
+export pure circuit schnorrChallenge(
+    ann_x: Field, ann_y: Field,
+    pk_x: Field, pk_y: Field,
+    msg: Vector<4, Field>
+): Field {
+    return Schnorr_schnorrChallenge(ann_x, ann_y, pk_x, pk_y, msg);
+}
