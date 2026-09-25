@@ -27,18 +27,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  NAME_RE,
+  assertNoLeftoverTokens,
+  deriveNames,
+  fail,
+  renderTree,
+  substituteNames,
+  writeFiles,
+} from './lib/template.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const TEMPLATE_DIR = path.join(REPO_ROOT, 'templates', 'example');
 const EXAMPLES_DIR = path.join(REPO_ROOT, 'examples');
-
-const NAME_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-
-function fail(msg) {
-  console.error(`✖ ${msg}`);
-  process.exit(1);
-}
 
 function usage() {
   console.log(
@@ -79,9 +81,8 @@ if (!fs.existsSync(TEMPLATE_DIR)) {
 }
 
 // --- name derivations -------------------------------------------------------
-const words = name.split('-');
-const Name = words.map((w) => w[0].toUpperCase() + w.slice(1)).join(''); // PascalCase
-const Title = words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' '); // Space-joined
+const names = deriveNames(name);
+const { Name } = names;
 
 // --- token/marker substitution ----------------------------------------------
 const KNOWN_TOKENS = [
@@ -96,10 +97,7 @@ const KNOWN_TOKENS = [
 
 function substitute(content) {
   // 1) Plain name tokens (case-sensitive, non-overlapping).
-  let out = content
-    .replaceAll('__Title__', Title)
-    .replaceAll('__Name__', Name)
-    .replaceAll('__name__', name);
+  let out = substituteNames(content, names);
 
   // 2) Witness markers. Values are pre-resolved so ordering is irrelevant.
   if (withWitnesses) {
@@ -122,43 +120,18 @@ function substitute(content) {
   return out;
 }
 
-function assertNoLeftoverTokens(rel, content) {
-  const leftovers = KNOWN_TOKENS.filter((t) => content.includes(t));
-  if (leftovers.length > 0) {
-    fail(`unresolved template token(s) ${leftovers.join(', ')} in ${rel} — this is a generator bug.`);
-  }
-}
-
-// --- recursive copy ---------------------------------------------------------
-const created = [];
-
-function copyTree(srcDir, destDir) {
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    const srcPath = path.join(srcDir, entry.name);
-    const relFromTemplate = path.relative(TEMPLATE_DIR, srcPath);
-
-    // Only copy the witnesses stub when --witnesses is set.
-    if (!withWitnesses && relFromTemplate === path.join('contract', 'witnesses.ts')) {
-      continue;
-    }
-
-    const destName = entry.name.replaceAll('__name__', name);
-    const destPath = path.join(destDir, destName);
-
-    if (entry.isDirectory()) {
-      copyTree(srcPath, destPath);
-    } else {
-      const raw = fs.readFileSync(srcPath, 'utf8');
-      const content = substitute(raw);
-      assertNoLeftoverTokens(path.relative(TEMPLATE_DIR, srcPath), content);
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.writeFileSync(destPath, content);
-      created.push(path.relative(REPO_ROOT, destPath));
-    }
-  }
-}
-
-copyTree(TEMPLATE_DIR, targetDir);
+// --- render + write ----------------------------------------------------------
+const files = renderTree(TEMPLATE_DIR, {
+  name,
+  // Only copy the witnesses stub when --witnesses is set.
+  skip: (rel) => !withWitnesses && rel === path.join('contract', 'witnesses.ts'),
+  render: (raw, rel) => {
+    const content = substitute(raw);
+    assertNoLeftoverTokens(rel, content, KNOWN_TOKENS);
+    return content;
+  },
+});
+const created = writeFiles(targetDir, files).map((p) => path.relative(REPO_ROOT, p));
 
 // --- registration (best-effort, idempotent) ---------------------------------
 function registerCi() {
@@ -236,4 +209,5 @@ console.log('    Then, from the repo root:');
 console.log('      yarn install');
 console.log(`      yarn workspace @midnight-ntwrk/example-${name} run compile`);
 console.log(`    And from examples/${name}:  yarn env:up && yarn wait:dust && yarn test:local && yarn env:down`);
+console.log(`    Optional, once the tests pass: yarn new:ui ${name}   (browser frontend)`);
 console.log('');

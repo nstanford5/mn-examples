@@ -29,6 +29,7 @@ mn-examples/
 │   └── fast-sync/        # shared remote-network wallet harness (pre-seed, .env, funding gate)
 ├── preseed/              # pre-seed reference bundles, per network
 ├── templates/example/    # scaffold copied by `yarn new:example`
+├── templates/ui/         # browser UI scaffold rendered by `yarn new:ui`
 ├── tsconfig.base.json    # shared TypeScript compiler options
 ├── vitest.config.ts      # aggregate test projects (per-example configs still own env)
 └── .github/workflows/    # CI: compile-and-run every example on a matrix
@@ -130,6 +131,11 @@ and asserts that he has no DUST of his own.
   copies `templates/example/` into `examples/<name>`, wires the harness, and
   registers the example in the CI matrix and the docs tables. You then only
   write the `.compact` contract and the test bodies. See `templates/example/`.
+- **Add a browser UI with `yarn new:ui <name>`** once the contract compiles and
+  its tests pass. It renders `templates/ui/` into `examples/<name>/ui`, deriving
+  circuits, witnesses and ledger fields from the compiled contract, so the UI
+  typechecks, tests and builds before any use-case code is written. See
+  `examples/hello-world/ui/AGENTS.md`.
 - The `.compact` **source is committed** (only generated `contract/managed/` output is
   gitignored). Do not re-introduce a `.gitignore` rule that hides `*.compact`.
 - Each example carries an `AGENTS.md` describing what it teaches and how to run it.

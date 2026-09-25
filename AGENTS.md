@@ -56,6 +56,9 @@ corepack enable          # Yarn 4 via packageManager field
 yarn install             # whole-workspace install (one lockfile)
 yarn compile             # compile all contracts (foreach, parallel)
 yarn workspace @midnight-ntwrk/example-<name> run compile   # one example
+yarn new:example <name> [--witnesses]   # phase 1: scaffold an example
+yarn new:ui <name>                      # phase 2: scaffold its browser UI (after test:local is green)
+yarn new:ui <name> --check              # template-owned UI files still match templates/ui
 ```
 
 Per example (from `examples/<name>`): `yarn env:up`, `yarn wait:dust`,
@@ -105,7 +108,14 @@ Each example has its own `AGENTS.md` with specifics.
 - Extend `../../tsconfig.base.json` in the example `tsconfig.json`.
 - Provide `compile`, `test`, `test:local`, `env:up`, `env:down`, `wait:dust`
   scripts so the CI matrix and root aggregates work unchanged.
-- Adding a browser frontend to an example: follow `examples/hello-world/ui/AGENTS.md`
-  (the reference UI pattern: pins, provider swap, verification checklist).
+- Adding a browser frontend is **phase 2**: once the contract compiles and
+  `test:local` is green, run `yarn new:ui <name>`. Don't hand-copy
+  `hello-world/ui`. The generator reads `contract-info.json` and writes a UI
+  that already typechecks, tests and builds. Put use-case code only in the seed
+  files: `src/midnight/<name>-api.ts`, `src/components/<name>-panel.tsx` and
+  `src/__tests__/<name>-circuits.test.ts`. Generic UI changes go in
+  `templates/ui/`, followed by `yarn new:ui <name> --sync`; CI runs `--check` on
+  every generated UI. Details, pins and the verification checklist are in
+  `examples/hello-world/ui/AGENTS.md`.
 - Add meticulous comments in contracts and witnesses explaining the *how* and
   *why* — these examples are read by agents as much as by people.
