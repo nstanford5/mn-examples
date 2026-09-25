@@ -16,7 +16,7 @@ who copies it gets working code.
 mn-examples/
 ├── examples/
 │   ├── hello-world/      # environment smoke test + minimal contract/test suite + browser UI (ui/)
-│   ├── calculator/       # public ledger value + arithmetic circuits + a divMod witness
+│   ├── calculator/       # public ledger value + arithmetic circuits + a divMod witness + browser UI (ui/)
 │   ├── private-party/    # private on-chain data, access control, DUST sponsorship
 │   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens
 │   ├── silent-auction/   # sealed reserve price (commit-reveal), NFT auction state machine
@@ -135,7 +135,7 @@ and asserts that he has no DUST of his own.
   its tests pass. It renders `templates/ui/` into `examples/<name>/ui`, deriving
   circuits, witnesses and ledger fields from the compiled contract, so the UI
   typechecks, tests and builds before any use-case code is written. See
-  `examples/hello-world/ui/AGENTS.md`.
+  `templates/ui/AGENTS.md` (copied into every generated UI).
 - The `.compact` **source is committed** (only generated `contract/managed/` output is
   gitignored). Do not re-introduce a `.gitignore` rule that hides `*.compact`.
 - Each example carries an `AGENTS.md` describing what it teaches and how to run it.
