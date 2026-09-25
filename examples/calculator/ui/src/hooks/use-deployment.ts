@@ -47,8 +47,12 @@ export interface Deployment<T, I = void> {
   /** Retry joining the remembered address (after a failed automatic re-join). */
   rejoin: () => Promise<void>;
   forget: () => void;
-  /** Run an async operation with the shared busy/error state. */
-  run: (kind: string, fn: () => Promise<void>) => Promise<void>;
+  /**
+   * Run an async operation with the shared busy/error state. Resolves to true
+   * when `fn` succeeded; on failure the error is in `error`, and it resolves
+   * to false (it never rejects).
+   */
+  run: (kind: string, fn: () => Promise<unknown>) => Promise<boolean>;
 }
 
 /**
@@ -110,13 +114,15 @@ export function useDeployment<T, I = void>(ops: DeploymentOps<T, I>): Deployment
     };
   }, [rejoinSaved]);
 
-  const run = useCallback(async (kind: string, fn: () => Promise<void>) => {
+  const run = useCallback(async (kind: string, fn: () => Promise<unknown>): Promise<boolean> => {
     setBusy(kind);
     setError(null);
     try {
       await fn();
+      return true;
     } catch (err: unknown) {
       setError(errorMessage(err, `Failed while ${kind}`));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -129,7 +135,7 @@ export function useDeployment<T, I = void>(ops: DeploymentOps<T, I>): Deployment
       storage.set(addressKey, a);
       setContract(c);
       setAddress(a);
-    });
+    }).then(() => undefined);
 
   const join = (input: string) =>
     run("joining", async () => {
@@ -139,7 +145,7 @@ export function useDeployment<T, I = void>(ops: DeploymentOps<T, I>): Deployment
       storage.set(addressKey, a);
       setContract(c);
       setAddress(a);
-    });
+    }).then(() => undefined);
 
   const rejoin = async () => rejoinSaved(() => false);
 

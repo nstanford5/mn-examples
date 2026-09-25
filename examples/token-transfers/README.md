@@ -51,3 +51,13 @@ server (`yarn proof:up`), then from the repo root run `yarn preseed:cut` followe
 by `yarn wallets:new`, fund the printed addresses at the faucet, and run
 `yarn test:preprod`. The wallet seeds live in one repo-root `.env.<network>` that
 every example shares.
+
+## Browser UI
+
+`ui/` runs these circuits in the browser behind a Lace wallet. There is no
+ledger to show, so it shows your wallet's balances as tokens move. See
+[`ui/README.md`](ui/README.md).
+
+```bash
+yarn workspace @midnight-ntwrk/example-token-transfers-ui dev
+```

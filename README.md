@@ -18,7 +18,7 @@ mn-examples/
 │   ├── hello-world/      # environment smoke test + minimal contract/test suite + browser UI (ui/)
 │   ├── calculator/       # public ledger value + arithmetic circuits + a divMod witness + browser UI (ui/)
 │   ├── private-party/    # private on-chain data, access control, DUST sponsorship + browser UI (ui/)
-│   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens
+│   ├── token-transfers/  # mint/send/receive for unshielded, NIGHT, and shielded tokens + browser UI (ui/)
 │   ├── silent-auction/   # sealed reserve price (commit-reveal), NFT auction state machine
 │   ├── election/   # TODO: one-line description
 │   ├── secret-message/   # private message: publish a hash commitment, not the plaintext

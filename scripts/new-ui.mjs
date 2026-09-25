@@ -20,6 +20,7 @@
 //
 //   yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]
 //                                                   scaffold examples/<name>/ui
+//   yarn new:ui <name> --dry-run [flags]            print what create would generate, write nothing
 //   yarn new:ui <name> --check                      diff template-owned files (CI)
 //   yarn new:ui <name> --sync                       rewrite template-owned files
 //   yarn new:ui --check-all                         --check every generated UI, and the lockfile
@@ -34,6 +35,12 @@
 //   contract/managed/<c>/contract/index.d.ts          constructor arity only
 //   contract/witnesses.ts                             private-state factory (read even
 //                                                     without witnesses)
+//   contract/<c>.compact                              which token operations it calls
+//
+// Seed templates may wrap lines in `// @if <cond>` ... `// @endif` (or the JSX
+// form `{/* @if <cond> */}` ... `{/* @endif */}`); the block is kept only when
+// <cond> holds (see CONDITIONS). Template-owned files must not use them: their
+// content has to be the same for every example.
 //
 // Files come in two kinds (see SEED_FILES):
 //   template-owned  identical for every example up to name substitution. Change
@@ -57,10 +64,13 @@ import {
   substituteNames,
   writeFiles,
 } from './lib/template.mjs';
+import { readAll, renderBlock, skeleton, VERIFICATION_FILE, withBlock } from './lib/verification.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const TEMPLATE_DIR = path.join(REPO_ROOT, 'templates', 'ui');
+/** Every UI's hand-run verification status, one generated table (lib/verification.mjs). */
+const VERIFIED_DOC = path.join(TEMPLATE_DIR, 'VERIFIED.md');
 const EXAMPLES_DIR = path.join(REPO_ROOT, 'examples');
 assertNodeVersion(REPO_ROOT);
 
@@ -98,6 +108,8 @@ const KNOWN_TOKENS = [
   '__PANEL_API_IMPORTS__',
   '__LEDGER_FIELDS__',
   '__CIRCUIT_LIST__',
+  '__CIRCUITS_STEP__',
+  '__BALANCES_STEP__',
   '__CIRCUIT_CALLS__',
   '__DEPLOYMENT_OPS__',
   '__TEST_BODY__',
@@ -107,6 +119,7 @@ function usage() {
   console.log(
     [
       'Usage: yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]',
+      '       yarn new:ui <name> --dry-run [--contract ...] [--private-state ...]',
       '       yarn new:ui <name> --check | --sync',
       '       yarn new:ui --check-all | --sync-all',
       '',
@@ -118,6 +131,8 @@ function usage() {
       '                   default: persistent when the create<X>PrivateState factory',
       '                   in contract/witnesses.ts takes arguments (per-user secrets),',
       '                   with or without witnesses; else memory',
+      '  --dry-run     print the create summary (forms, TODOs, storage, warnings) and',
+      '                write nothing; works even when ui/ already exists',
       '  --check       compare template-owned files in examples/<name>/ui with the',
       '                template; exit 1 on any difference (seed files are ignored)',
       '  --sync        rewrite template-owned files in examples/<name>/ui (seeds untouched)',
@@ -195,11 +210,11 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith('--contract=')) contractFlag = a.slice('--contract='.length);
   else if (a === '--private-state') privateStateFlag = argv[++i] ?? fail('--private-state needs a value');
   else if (a.startsWith('--private-state=')) privateStateFlag = a.slice('--private-state='.length);
-  else if (['--check', '--sync', '--check-all', '--sync-all'].includes(a)) flags.add(a);
+  else if (['--check', '--sync', '--check-all', '--sync-all', '--dry-run'].includes(a)) flags.add(a);
   else if (a.startsWith('-')) fail(`unknown flag ${a}`);
   else positionals.push(a);
 }
-if (flags.size > 1) fail('--check, --sync, --check-all and --sync-all are mutually exclusive');
+if (flags.size > 1) fail('--check, --sync, --check-all, --sync-all and --dry-run are mutually exclusive');
 if (flags.has('--check-all') || flags.has('--sync-all')) {
   if (positionals.length || contractFlag !== null || privateStateFlag !== null) {
     fail('--check-all / --sync-all take no <name>, --contract or --private-state (each UI keeps its new-ui.json)');
@@ -211,6 +226,8 @@ if (positionals.length !== 1) {
   fail('exactly one <name> argument is required');
 }
 const mode = flags.has('--check') ? 'check' : flags.has('--sync') ? 'sync' : 'create';
+/** --dry-run: a create that stops before writing anything. */
+const dryRun = flags.has('--dry-run');
 const name = positionals[0];
 if (!NAME_RE.test(name)) fail(`invalid name '${name}' (kebab-case, e.g. hello-world)`);
 if (privateStateFlag !== null && !['memory', 'persistent'].includes(privateStateFlag)) {
@@ -224,7 +241,7 @@ const pkg = `@midnight-ntwrk/example-${name}`;
 if (!fs.existsSync(path.join(exampleDir, 'package.json'))) {
   fail(`examples/${name} does not exist. Scaffold it first:  yarn new:example ${name}`);
 }
-if (mode === 'create' && fs.existsSync(uiDir)) {
+if (mode === 'create' && !dryRun && fs.existsSync(uiDir)) {
   fail(`examples/${name}/ui already exists. Use --check or --sync to compare/update template-owned files.`);
 }
 if (mode !== 'create' && !fs.existsSync(uiDir)) {
@@ -307,46 +324,72 @@ function argTypeLiteral(t) {
     case 'Alias':
       return argTypeLiteral(t.type);
     case 'Struct':
-      // The stdlib UserAddress, { bytes: Uint8Array } in TypeScript. The form
-      // fills it from the wallet (lib/addresses.ts). Other structs: no form.
-      return t.name === 'UserAddress' &&
-        t.elements?.length === 1 &&
-        t.elements[0].name === 'bytes' &&
-        t.elements[0].type['type-name'] === 'Bytes' &&
-        t.elements[0].type.length === 32
-        ? '{ kind: "userAddress" }'
-        : null;
+      // Three stdlib structs have a generic input. UserAddress and
+      // ZswapCoinPublicKey are { bytes: Uint8Array } in TypeScript, and the
+      // form can fill them from the wallet (lib/addresses.ts). A
+      // ShieldedCoinInfo is picked from coins earlier results returned
+      // (lib/coin-book.ts). Other structs: no form.
+      if (isBytesStruct(t, 'UserAddress')) return '{ kind: "userAddress" }';
+      if (isBytesStruct(t, 'ZswapCoinPublicKey')) return '{ kind: "coinPublicKey" }';
+      if (isShieldedCoinInfo(t)) return '{ kind: "shieldedCoin" }';
+      return null;
     default:
       return null;
   }
 }
 
+/** A stdlib struct `name { bytes: Bytes<32> }`, matched by shape as well as name. */
+function isBytesStruct(t, name) {
+  const [e, ...rest] = t.elements ?? [];
+  return t.name === name && rest.length === 0 && e?.name === 'bytes' && isBytes32(e.type);
+}
+const isBytes32 = (t) => t?.['type-name'] === 'Bytes' && t.length === 32;
+/** The stdlib ShieldedCoinInfo { nonce: Bytes<32>, color: Bytes<32>, value: Uint<128> }. */
+function isShieldedCoinInfo(t) {
+  const el = Object.fromEntries((t.elements ?? []).map((e) => [e.name, e.type]));
+  return (
+    t.name === 'ShieldedCoinInfo' &&
+    t.elements.length === 3 &&
+    isBytes32(el.nonce) &&
+    isBytes32(el.color) &&
+    el.value?.['type-name'] === 'Uint'
+  );
+}
+
 /**
  * A Bytes argument named like a secret (private-party's `_secret`, an `sk`) or
  * a one-time value (a mint `nonce`, a `salt`). A generic form would ask the
- * user to paste or invent it; the UI should generate it, and keep a secret in
- * private state as the Node test does. Such circuits get a TODO, not a form.
+ * user to paste or invent it. The UI should generate it instead: a secret once,
+ * kept in private state as the Node test does; a one-time value fresh for
+ * every call (reusing a mint nonce mints the same coin again). Such circuits
+ * get a TODO, not a form.
  */
-const SECRET_NAME_RE = /secret|^_?sk$|priv|seed|nonce|salt/i;
-const isSecretArg = (a) => SECRET_NAME_RE.test(a.name) && a.type['type-name'] === 'Bytes';
+const SECRET_NAME_RE = /secret|^_?sk$|priv|seed/i;
+const ONE_TIME_NAME_RE = /nonce|salt/i;
+const isBytes = (a) => a.type['type-name'] === 'Bytes';
+const isSecretArg = (a) => SECRET_NAME_RE.test(a.name) && isBytes(a);
+const isOneTimeArg = (a) => !isSecretArg(a) && ONE_TIME_NAME_RE.test(a.name) && isBytes(a);
+const SECRET_ADVICE = 'generate it once in code and keep it in private state';
+const ONE_TIME_ADVICE = 'generate fresh random bytes in code for every call';
 const typeLabel = (t) => [t['type-name'], t.name, t.tsType].filter(Boolean).join(' ');
 
 const circuits = info.circuits
   .filter((c) => c.proof)
   .map((c) => {
     const secrets = c.arguments.filter(isSecretArg);
+    const oneTime = c.arguments.filter(isOneTimeArg);
     const unsupported = c.arguments.filter((a) => argTypeLiteral(a.type) === null);
     const reasons = [
-      ...secrets.map(
-        (a) =>
-          `${a.name} looks like a secret or one-time value: generate it in code, and keep a secret in private state`,
-      ),
+      ...secrets.map((a) => `${a.name} looks like a secret: ${SECRET_ADVICE}`),
+      ...oneTime.map((a) => `${a.name} looks like a one-time value: ${ONE_TIME_ADVICE}`),
       ...unsupported.map((a) => `${a.name} is a ${typeLabel(a.type)}`),
     ];
     return {
       name: c.name,
       args: c.arguments.map((a) => a.name),
       secretArgs: secrets.map((a) => a.name),
+      oneTimeArgs: oneTime.map((a) => a.name),
+      unsupportedArgs: unsupported.map((a) => `${a.name} (${typeLabel(a.type)})`),
       specs: reasons.length ? null : c.arguments.map((a) => ({ name: a.name, type: argTypeLiteral(a.type) })),
       todo: reasons.join('; '),
     };
@@ -357,6 +400,7 @@ const enumValuesOf = (t) => (!t ? null : t['type-name'] === 'Alias' ? enumValues
 const ledgerFields = info.ledger
   .filter((l) => l.exported)
   .map((l) => ({ name: l.name, storage: l.storage ?? 'Cell', enumValues: enumValuesOf(l.type) }));
+const hasLedger = ledgerFields.length > 0;
 const hasWitnesses = info.witnesses.length > 0;
 
 // contract-info.json doesn't list stdlib calls, so read the source: the
@@ -367,8 +411,20 @@ const ownSource = compactSources.find((f) => f === `${managed}.compact`);
 const compactSrc = (ownSource ? [ownSource] : compactSources)
   .map((f) => fs.readFileSync(path.join(contractDir, f), 'utf8'))
   .join('\n');
-/** An unshieldedBalance* check fails in memory unless the test sets a balance. */
-const usesUnshielded = /\b(receiveUnshielded|sendUnshielded|unshieldedBalance\w*)\s*\(/.test(compactSrc);
+/**
+ * An unshieldedBalance* check fails in memory unless the test sets a balance.
+ * Plain sends and receives don't check it, so they run in memory as they are.
+ */
+const checksUnshieldedBalance = /\bunshieldedBalance\w*\s*\(/.test(compactSrc);
+/**
+ * Token movements aren't ledger state. In memory they show up in the call's
+ * Effects; on chain, in wallet balances.
+ */
+const tokenOps = [
+  ...new Set(
+    compactSrc.match(/\b(mintUnshieldedToken|sendUnshielded|receiveUnshielded|mintShieldedToken|sendShielded|receiveShielded)(?=\s*\()/g) ?? [],
+  ),
+];
 
 // contract-info.json does not describe the constructor. The generated
 // declaration does: a constructor without parameters is exactly this line.
@@ -444,7 +500,7 @@ const taken = new Set([
   'CIRCUITS', 'CALLS', 'CircuitForm', 'LEDGER_FIELDS', 'formatLedgerValue', 'LedgerField', 'useMemo',
   'useContractState',
   'useDeployment', 'DeploymentCard', 'Card', 'CardContent', 'CardDescription', 'CardHeader',
-  'CardTitle', 'ArgSpec', 'CircuitSpec',
+  'CardTitle', 'ArgSpec', 'CircuitSpec', 'WalletBalancesCard',
 ]);
 for (const c of circuits) {
   if (taken.has(c.name)) fail(`circuit '${c.name}' collides with an identifier in the generated ${name}-api.ts or ${name}-panel.tsx.`);
@@ -475,7 +531,7 @@ function testBody() {
           `import { ${witnessesSpecifier} } from "../../../contract/witnesses.js";`,
         ]
       : []),
-    ...(usesUnshielded ? ['// import { withUnshieldedBalance } from "./contract-balance";'] : []),
+    ...(checksUnshieldedBalance ? ['// import { withUnshieldedBalance } from "./contract-balance";'] : []),
     '',
     ...(constructs ? ['const COIN_PK = "00".repeat(32);', ''] : []),
     'describe("__name__ contract (in memory)", () => {',
@@ -486,7 +542,9 @@ function testBody() {
           '    const { currentContractState } = contract.initialState(',
           '      createConstructorContext(createInitialPrivateState(), COIN_PK),',
           '    );',
-          '    expect(ledger(currentContractState.data)).toBeDefined();',
+          ...(hasLedger
+            ? ['    expect(ledger(currentContractState.data)).toBeDefined();']
+            : ['    // The contract exports no ledger fields.', '    expect(ledger(currentContractState.data)).toEqual({});']),
           '  });',
         ]
       : [
@@ -499,10 +557,10 @@ function testBody() {
     ...(circuits.length
       ? [
           '',
-          '  // TODO: one test per circuit, asserting on the ledger the UI will show:',
+          `  // TODO: one test per circuit, asserting on ${hasLedger ? 'the ledger the UI will show' : 'what it returns and does'}:`,
           '  //   const ctx = createCircuitContext(dummyContractAddress(), COIN_PK,',
           '  //     currentContractState, createInitialPrivateState());',
-          ...(usesUnshielded
+          ...(checksUnshieldedBalance
             ? [
                 '  // The contract moves unshielded tokens, and an in-memory context starts',
                 "  // with an empty contract balance (receiveUnshielded doesn't credit the",
@@ -511,8 +569,18 @@ function testBody() {
                 '  //   withUnshieldedBalance(ctx, amount);',
               ]
             : []),
-          '  //   const { context } = contract.impureCircuits.<circuit>(ctx, ...args);',
-          '  //   expect(ledger(context.currentQueryContext.state)).toEqual(...);',
+          '  //   const { result, context } = contract.impureCircuits.<circuit>(ctx, ...args);',
+          ...(hasLedger ? ['  //   expect(ledger(context.currentQueryContext.state)).toEqual(...);'] : []),
+          ...(tokenOps.length
+            ? [
+                `  // Token movements (${tokenOps.join(', ')}) aren't ledger state. Assert`,
+                "  // on the call's effects instead, e.g.",
+                '  //   context.currentQueryContext.effects.unshieldedOutputs  // Map<TokenType, bigint>',
+                '  // (also unshieldedMints, unshieldedInputs, claimedUnshieldedSpends,',
+                '  // shieldedMints, claimedShieldedReceives, ...). TokenType keys are objects',
+                "  // ({ tag, raw }), so compare the Map's entries; get(key) won't match.",
+              ]
+            : []),
           ...circuits.map((c) => `  it.todo(${JSON.stringify(`${c.name}(${c.args.join(', ')})`)});`),
         ]
       : []),
@@ -627,7 +695,7 @@ const blocks = {
   __PANEL_API_IMPORTS__: [
     !hasCtorArgs && psAuto && `deploy${Name}`,
     psAuto && `join${Name}`,
-    'ledger$',
+    hasLedger && 'ledger$',
     ...formCircuits.map((c) => c.name),
     formCircuits.length > 0 && 'type CircuitArgs',
     `type ${Name}Contract`,
@@ -665,7 +733,11 @@ const blocks = {
     : '[]',
   __CIRCUIT_CALLS__: formCircuits.length
     ? `{\n${formCircuits
-        .map((c) => `  ${c.name}: (contract, args) => ${c.name}(contract, ...(args as CircuitArgs<${JSON.stringify(c.name)}>)),`)
+        .map(
+          (c) =>
+            `  ${c.name}: async (contract, args) =>\n` +
+            `    (await ${c.name}(contract, ...(args as CircuitArgs<${JSON.stringify(c.name)}>))).private.result,`,
+        )
         .join('\n')}\n}`
     : '{}',
   __DEPLOYMENT_OPS__: [
@@ -686,11 +758,39 @@ const blocks = {
           '    join: () => Promise.reject(new Error("TODO: supply the initial private state to join__Name__")),',
         ]),
   ].join('\n'),
+  // Panel cards: 1. deployment, then ledger and wallet balances when present.
+  __BALANCES_STEP__: String(hasLedger ? 3 : 2),
+  __CIRCUITS_STEP__: String(2 + Number(hasLedger) + Number(tokenOps.length > 0)),
   __TEST_BODY__: testBody(),
 };
 
+/** `// @if <cond>` blocks in seed templates (see the header comment). */
+const CONDITIONS = { ledger: hasLedger, tokens: tokenOps.length > 0 };
+const IF_RE = /^\s*(?:\/\/|\{\/\*)\s*@if\s+(\w+)\s*(?:\*\/\})?\s*$/;
+const ENDIF_RE = /^\s*(?:\/\/|\{\/\*)\s*@endif\s*(?:\*\/\})?\s*$/;
+function applyConditions(raw, rel) {
+  const keep = [];
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const open = IF_RE.exec(line);
+    if (open) {
+      if (!(open[1] in CONDITIONS)) fail(`unknown condition '@if ${open[1]}' in templates/ui/${rel}`);
+      keep.push(CONDITIONS[open[1]]);
+    } else if (ENDIF_RE.test(line)) {
+      if (keep.pop() === undefined) fail(`'@endif' without '@if' in templates/ui/${rel}`);
+    } else if (keep.every(Boolean)) {
+      out.push(line);
+    }
+  }
+  if (keep.length) fail(`unclosed '@if' in templates/ui/${rel}`);
+  if (out.length !== raw.split('\n').length && !SEED_FILES.has(rel)) {
+    fail(`templates/ui/${rel} is template-owned and must not use '@if' blocks`);
+  }
+  return out.join('\n');
+}
+
 function render(raw, rel) {
-  let out = raw;
+  let out = applyConditions(raw, rel);
   // Import line for witnesses: drop the whole line when there are none.
   const witnessImports = [factory, hasWitnesses && witnessesSpecifier].filter(Boolean);
   out = witnessImports.length
@@ -709,7 +809,8 @@ function render(raw, rel) {
 
 const files = renderTree(TEMPLATE_DIR, {
   name,
-  skip: (rel) => mode !== 'create' && SEED_FILES.has(rel),
+  // VERIFIED.md describes every UI, so it stays in templates/ui only.
+  skip: (rel) => rel === 'VERIFIED.md' || (mode !== 'create' && SEED_FILES.has(rel)),
   render,
 });
 
@@ -750,6 +851,9 @@ if (mode === 'check') {
   if (savedConfig === null) problems.push(`  ${CONFIG}  (missing)`);
   else if (fs.readFileSync(configPath, 'utf8') !== configContent) problems.push(`  ${CONFIG}  (not canonical)`);
   for (const f of stale) problems.push(`  ${f}  (no longer in templates/ui)`);
+  const verified = verifiedDoc();
+  for (const e of verified.errors) problems.push(`  ${e}`);
+  if (verified.stale) problems.push(`  templates/ui/VERIFIED.md  (its table is out of date with the verification.json files)`);
   if (drift.length === 0 && problems.length === 0) {
     console.log(`✔ examples/${name}/ui matches templates/ui (${files.length} template-owned files)`);
     process.exit(0);
@@ -767,10 +871,24 @@ if (mode === 'check') {
   );
   if (problems.length) {
     console.error(
-      `  A missing/out-of-date ${MANIFEST} or ${CONFIG}, or a stale file, is fixed by \`yarn new:ui ${name} --sync\`.`,
+      `  A missing/out-of-date ${MANIFEST} or ${CONFIG}, a stale file, or a stale VERIFIED.md table is fixed by\n` +
+        `  \`yarn new:ui ${name} --sync\`. A malformed ${VERIFICATION_FILE} has to be fixed by hand.`,
     );
   }
   process.exit(1);
+}
+
+/**
+ * templates/ui/VERIFIED.md as it should be, from every generated UI's
+ * verification.json (this one included, even mid-create).
+ */
+function verifiedDoc() {
+  const names = [...new Set([...generatedUis(), name])].sort();
+  const { entries, errors } = readAll(EXAMPLES_DIR, names);
+  const doc = fs.readFileSync(VERIFIED_DOC, 'utf8');
+  const content = withBlock(doc, renderBlock(entries));
+  if (content === null) return { errors: [...errors, 'templates/ui/VERIFIED.md: lost its BEGIN/END markers'], stale: false };
+  return { errors, stale: content !== doc, content };
 }
 
 /** A few lines of context around the first differing line. */
@@ -785,9 +903,17 @@ function firstDifference(expected, actual) {
   return lines.join('\n');
 }
 
-const written = writeFiles(uiDir, files).map((p) => path.relative(REPO_ROOT, p));
-fs.writeFileSync(path.join(uiDir, MANIFEST), manifestContent);
-fs.writeFileSync(configPath, configContent);
+const written = dryRun ? [] : writeFiles(uiDir, files).map((p) => path.relative(REPO_ROOT, p));
+if (!dryRun) {
+  fs.writeFileSync(path.join(uiDir, MANIFEST), manifestContent);
+  fs.writeFileSync(configPath, configContent);
+  // Author-owned once it exists: only ever created, never rewritten.
+  const verificationPath = path.join(uiDir, VERIFICATION_FILE);
+  if (!fs.existsSync(verificationPath)) fs.writeFileSync(verificationPath, skeleton());
+  const verified = verifiedDoc();
+  if (verified.errors.length) fail(`can't update templates/ui/VERIFIED.md:\n  ${verified.errors.join('\n  ')}`);
+  if (verified.stale) fs.writeFileSync(VERIFIED_DOC, verified.content);
+}
 
 if (mode === 'sync') {
   for (const f of stale) fs.rmSync(path.join(uiDir, ...f.split('/')));
@@ -799,35 +925,69 @@ if (mode === 'sync') {
 
 // --- summary ----------------------------------------------------------------
 const rel = (p) => p.split(path.sep).join('/');
-console.log(`\n✔ Scaffolded examples/${name}/ui from contract/managed/${managed}`);
+const plural = (list, one, many) => `${list.join(', ')} ${list.length === 1 ? one : many}`;
+console.log(
+  dryRun
+    ? `\n  Dry run: examples/${name}/ui from contract/managed/${managed} (nothing written)`
+    : `\n✔ Scaffolded examples/${name}/ui from contract/managed/${managed}`,
+);
 console.log(
   `  circuits: ${circuits.map((c) => c.name).join(', ') || '(none)'}` +
+    `\n  generic forms: ${formCircuits.map((c) => c.name).join(', ') || '(none)'}` +
+    `\n  ledger fields: ${ledgerFields.map((l) => l.name).join(', ') || '(none: no ledger card or ledger$)'}` +
     `\n  witnesses: ${hasWitnesses ? 'yes' : 'none'}` +
     `\n  private state: ${factory ? `${factory}(${factoryParams})${factoryTakesArgs ? ', needs args' : ''}` : 'none'}` +
     `\n  constructor args: ${hasCtorArgs ? `yes (${ctorParams})` : 'none'}` +
     `\n  private state storage: ${privateState}${privateStateFlag === null ? ' (default)' : ''}`,
 );
-console.log(`\n  ${written.length} files created. Seed files (yours to edit):`);
-for (const f of files.filter((f) => SEED_FILES.has(f.templateRel))) {
-  console.log(`    examples/${name}/ui/${rel(f.rel)}`);
+if (!dryRun) {
+  console.log(`\n  ${written.length} files created. Seed files (yours to edit):`);
+  for (const f of files.filter((f) => SEED_FILES.has(f.templateRel))) {
+    console.log(`    examples/${name}/ui/${rel(f.rel)}`);
+  }
 }
 if (needs) {
   console.log(`\n  ⚠ Deploy needs ${needs}: the panel has a TODO that rejects until you supply them.`);
 }
-/** Secret-like argument name → the circuits that take it. */
-const secretUses = new Map();
-for (const c of circuits) for (const a of c.secretArgs) secretUses.set(a, [...(secretUses.get(a) ?? []), c.name]);
-for (const [arg, uses] of secretUses) {
+/** Argument name → the circuits that take it, for one kind of argument. */
+const usesOf = (key) => {
+  const uses = new Map();
+  for (const c of circuits) for (const a of c[key]) uses.set(a, [...(uses.get(a) ?? []), c.name]);
+  return uses;
+};
+for (const [arg, uses] of usesOf('secretArgs')) {
+  console.log(`  ⚠ ${arg} looks like a secret, so ${plural(uses, 'gets', 'get')} no form: ${SECRET_ADVICE}.`);
+}
+for (const [arg, uses] of usesOf('oneTimeArgs')) {
+  console.log(`  ⚠ ${arg} looks like a one-time value, so ${plural(uses, 'gets', 'get')} no form: ${ONE_TIME_ADVICE}.`);
+}
+for (const c of circuits.filter((c) => c.unsupportedArgs.length)) {
+  console.log(`  ⚠ ${c.name} gets no form: no generic input for ${c.unsupportedArgs.join(', ')}. Build one in the panel.`);
+}
+const coinTakers = formCircuits.filter((c) => c.specs.some((a) => a.type.includes('"shieldedCoin"'))).map((c) => c.name);
+if (coinTakers.length) {
   console.log(
-    `  ⚠ ${arg} looks like a secret or one-time value, so ${uses.join(', ')} get${uses.length === 1 ? 's' : ''} ` +
-      'no form field. Generate it in code, and keep a secret in private state.',
+    `  ⚠ ${plural(coinTakers, 'takes', 'take')} a ShieldedCoinInfo. Its form picks one of the coins earlier ` +
+      'calls returned in this session (lib/coin-book.ts); check the panel offers a circuit that returns one.',
   );
 }
-if (usesUnshielded) {
+if (checksUnshieldedBalance) {
   console.log(
-    '  ⚠ The contract moves unshielded tokens. In-memory tests start with an empty contract ' +
+    '  ⚠ The contract checks its unshielded balance. In-memory tests start with an empty contract ' +
       'balance: see withUnshieldedBalance in the circuits test.',
   );
+}
+if (tokenOps.length) {
+  console.log(
+    `  ⚠ The contract moves tokens (${tokenOps.join(', ')}). ` +
+      (hasLedger ? 'Those movements are not in the ledger readout. ' : '') +
+      "In memory, assert on the call's effects (see the circuits test). The panel shows the wallet's balances " +
+      '(<WalletBalancesCard>).',
+  );
+}
+if (dryRun) {
+  console.log(`\n  Nothing written. Rerun without --dry-run to create examples/${name}/ui.\n`);
+  process.exit(0);
 }
 console.log('\n  Next steps:');
 console.log('    1. yarn install   (the new workspace changes yarn.lock; commit it — CI uses --immutable)');

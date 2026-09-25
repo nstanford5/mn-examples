@@ -76,3 +76,12 @@ function isIterable(value: unknown): value is Iterable<unknown> {
     typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] === "function"
   );
 }
+
+/**
+ * A circuit's return value for display, or null when there is nothing to
+ * show: a circuit declared `: []` returns an empty array.
+ */
+export function formatResult(value: unknown): string | null {
+  if (value === undefined || (Array.isArray(value) && value.length === 0)) return null;
+  return formatScalar(value);
+}

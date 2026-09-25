@@ -1,0 +1,18 @@
+{
+  "steps": {
+    "browser": {
+      "status": "verified",
+      "date": "2026-09-24",
+      "notes": "`divide` ran in the page, calling the `divMod` witness. That covers the witness wiring only."
+    },
+    "laceDeploy": {
+      "status": "not-run"
+    },
+    "laceCalls": {
+      "status": "not-run"
+    },
+    "preprod": {
+      "status": "not-run"
+    }
+  }
+}

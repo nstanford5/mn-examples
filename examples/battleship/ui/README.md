@@ -34,12 +34,11 @@ forfeits it, and there is no recovery.
 
 ## TODO: end-to-end verification with Lace
 
-Not yet run. Everything below needs a human to approve wallet prompts. What
-*has* been verified (unit tests, build, in-browser circuits, IndexedDB
-round-trip) is in the table in `AGENTS.md` under "What was actually verified".
-When you run these, tick them off. Once all pass, mark the Lace columns ✅ in
-that table (in `templates/ui/AGENTS.md`, then `yarn new:ui --sync-all`) and
-delete this section.
+Not yet run. Everything below needs a human to approve wallet prompts. What *has* been
+verified is in `templates/ui/VERIFIED.md`, generated from this UI's
+`verification.json`. When you run these, tick them off. Once all pass, set
+`laceDeploy` and `laceCalls` to `verified` in `verification.json` (with the
+date and what ran), run `yarn new:ui battleship --sync`, and delete this section.
 
 Setup: `yarn env:up && yarn wait:dust` here, `yarn workspace
 @midnight-ntwrk/example-battleship-ui dev`, and two Chrome profiles (A and B),

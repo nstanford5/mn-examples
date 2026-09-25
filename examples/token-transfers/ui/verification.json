@@ -1,0 +1,18 @@
+{
+  "steps": {
+    "browser": {
+      "status": "verified",
+      "date": "2026-09-25",
+      "notes": "`mintAndReceive` and `mintAndSendShielded` ran in the page. `customTokenColor` matched the color the circuit returned, and a verifier key was served byte-for-byte. The vitest suite replays the Node test's sequence and checks every call's `Effects` (mints, inputs, outputs, coin claims), and that the coin book finds the coins the shielded circuits return. Unrun with Lace, and not covered by any other UI: the wallet supplying a custom-token or shielded-coin input while balancing (`receiveTokens`, `receiveShieldedTokens`), and `getUnshieldedBalances` / `getShieldedBalances` keys matching the hex colors `<WalletBalancesCard>` labels."
+    },
+    "laceDeploy": {
+      "status": "not-run"
+    },
+    "laceCalls": {
+      "status": "not-run"
+    },
+    "preprod": {
+      "status": "not-run"
+    }
+  }
+}
