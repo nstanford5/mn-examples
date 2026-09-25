@@ -22,6 +22,9 @@
   UI is in `ui/src/midnight/battleship-api.ts`, and
   `ui/src/__tests__/battleship-circuits.test.ts` replays this example's Node
   test in memory.
+- **TODO:** the UI has not been run end to end with Lace. The checklist is
+  in `ui/README.md` ("TODO: end-to-end verification with Lace"). Don't
+  describe the UI as verified against a wallet until it's done.
 
 ## Run
 
