@@ -31,8 +31,9 @@ cd examples/calculator && yarn env:up && yarn wait:dust            # local devne
 yarn workspace @midnight-ntwrk/example-calculator-ui dev           # http://localhost:5173
 ```
 
-On the local devnet, give your browser wallet DUST with
-`yarn fund:wallet <mn_dust_…>` from `examples/hello-world`.
+On the local devnet, give your browser wallet DUST (and NIGHT) with
+`yarn fund:wallet <mn_dust_…> [mn_addr_…]`, run from anywhere in the repo. The
+page prints the exact command when the connected wallet has no DUST.
 
 ## Scripts
 

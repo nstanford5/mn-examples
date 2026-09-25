@@ -5,11 +5,15 @@
 //
 // Template-owned: edit templates/ui/src/components/circuit-form.tsx, then
 // `yarn new:ui <name> --sync`.
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { toHex } from "@midnight-ntwrk/midnight-js-utils";
+import { walletUserAddress } from "@/lib/addresses";
 import { defaultText, parseArgs, type ArgSpec } from "@/lib/circuit-args";
+import { errorMessage } from "@/lib/errors";
+import { WalletContext } from "@/providers/wallet-context";
 
 export function CircuitForm({
   name,
@@ -26,7 +30,10 @@ export function CircuitForm({
   onSubmit: (values: unknown[]) => void;
 }) {
   const [texts, setTexts] = useState(() => args.map((a) => defaultText(a.type)));
-  const parsed = parseArgs(args, texts);
+  const [fillError, setFillError] = useState<string | null>(null);
+  // Optional: the form also renders (and is unit-tested) outside a WalletProvider.
+  const wallet = useContext(WalletContext);
+  const parsed = parseArgs(args, texts, { networkId: wallet?.networkId });
   const set = (i: number, value: string) =>
     setTexts((prev) => prev.map((t, j) => (j === i ? value : t)));
 
@@ -72,6 +79,35 @@ export function CircuitForm({
                   ))}
                 </select>
               );
+            case "userAddress": {
+              const api = wallet?.connectedApi;
+              const networkId = wallet?.networkId;
+              return (
+                <div key={arg.name} className="flex min-w-64 flex-1 gap-2">
+                  <Input
+                    aria-label={label}
+                    className="flex-1"
+                    placeholder={placeholder(arg)}
+                    value={text}
+                    onChange={(e) => set(i, e.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!api || !networkId}
+                    onClick={() => {
+                      if (!api || !networkId) return;
+                      setFillError(null);
+                      walletUserAddress(api, networkId)
+                        .then((a) => set(i, toHex(a.bytes)))
+                        .catch((e: unknown) => setFillError(errorMessage(e, "couldn't read the wallet address")));
+                    }}
+                  >
+                    Use my address
+                  </Button>
+                </div>
+              );
+            }
             default:
               return (
                 <Input
@@ -92,6 +128,7 @@ export function CircuitForm({
         </Button>
       </div>
       {!parsed.ok && <p className="text-xs text-muted-foreground">{parsed.reason}</p>}
+      {fillError && <p className="text-xs text-destructive">{fillError}</p>}
     </form>
   );
 }
@@ -102,6 +139,8 @@ function placeholder({ name, type }: ArgSpec): string {
       return `${name} (0..${type.max})`;
     case "bytes":
       return `${name} (${type.length} bytes, hex)`;
+    case "userAddress":
+      return `${name} (mn_addr_… or hex)`;
     default:
       return name;
   }

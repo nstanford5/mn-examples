@@ -5,7 +5,10 @@ package.json
 scripts/copy-zk.mjs
 src/App.tsx
 src/__tests__/App.test.tsx
+src/__tests__/addresses.test.ts
 src/__tests__/circuit-form.test.tsx
+src/__tests__/contract-balance.test.ts
+src/__tests__/contract-balance.ts
 src/__tests__/errors.test.ts
 src/__tests__/ledger-format.test.ts
 src/__tests__/private-state.test.ts
@@ -27,6 +30,7 @@ src/hooks/use-deployment.ts
 src/hooks/use-dust-balance.ts
 src/hooks/use-wallet.ts
 src/index.css
+src/lib/addresses.ts
 src/lib/circuit-args.ts
 src/lib/errors.ts
 src/lib/ledger-format.ts

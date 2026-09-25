@@ -37,3 +37,4 @@ export {
   type FundingGateOptions,
 } from './funding.js';
 export { getOrCreateTestWallet, type PersistedWallet } from './test-wallet.js';
+export { registerNightForDust, transferNight } from './local-funding.js';

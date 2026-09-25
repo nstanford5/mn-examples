@@ -71,7 +71,7 @@ generation, and whoever registers the NIGHT can name any DUST address as the
 receiver. `fund:wallet` uses that:
 
 ```bash
-cd examples/hello-world
+# from anywhere in the repo (packages/fast-sync/scripts/fund-wallet.ts)
 yarn fund:wallet <your mn_dust_undeployed1… address> [mn_addr_undeployed1… for some NIGHT too]
 ```
 
