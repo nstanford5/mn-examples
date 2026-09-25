@@ -2,10 +2,12 @@ import { WalletProvider } from "@/providers/wallet-context";
 import { MidnightProvidersProvider } from "@/providers/midnight-providers";
 import { WalletWidget } from "@/components/wallet-widget";
 import { NetworkBadge } from "@/components/network-badge";
+import { PassphraseCard } from "@/components/passphrase-card";
 import { ProvingSettings } from "@/components/proving-settings";
 import { CalculatorPanel } from "@/components/calculator-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useWallet } from "@/hooks/use-wallet";
+import { useMidnightProviders } from "@/providers/midnight-providers";
 
 export function App() {
   return (
@@ -32,6 +34,7 @@ export function App() {
 
 function Main() {
   const { status } = useWallet();
+  const { locked } = useMidnightProviders();
 
   if (status !== "connected") {
     return (
@@ -58,7 +61,7 @@ function Main() {
           <ProvingSettings />
         </CardContent>
       </Card>
-      <CalculatorPanel />
+      {locked ? <PassphraseCard /> : <CalculatorPanel />}
     </>
   );
 }

@@ -1,0 +1,4 @@
+{
+  "contract": "calculator",
+  "privateState": "memory"
+}

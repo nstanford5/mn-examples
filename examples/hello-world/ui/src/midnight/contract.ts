@@ -15,10 +15,14 @@ import { CompiledContract } from "@midnight-ntwrk/midnight-js-protocol/compact-j
 import {
   Contract,
   ledger,
+  pureCircuits,
   type Ledger,
 } from "../../../contract/managed/hello-world/contract/index.js";
+import type { PrivateStateStorage } from "./private-state";
 
-export { Contract, ledger, type Ledger };
+// pureCircuits run locally with no proof and no tx (e.g. deriving a public
+// key from a secret to find "which player am I" on the ledger).
+export { Contract, ledger, pureCircuits, type Ledger };
 
 /** Every provable circuit, i.e. every ZK key set copy-zk.mjs serves. */
 export type HelloWorldCircuits = "storeMessage";
@@ -31,6 +35,13 @@ export type HelloWorldCircuits = "storeMessage";
 export type HelloWorldPrivateState = Record<string, never>;
 export const createInitialPrivateState = (): HelloWorldPrivateState => ({});
 export const PRIVATE_STATE_ID = "helloWorldPrivateState";
+
+/**
+ * Where private state is kept (`yarn new:ui --private-state`, recorded in
+ * ui/new-ui.json): in memory, so a reload
+ * loses it.
+ */
+export const PRIVATE_STATE_STORAGE: PrivateStateStorage = "memory";
 
 /** Where copy-zk.mjs puts the keys and zkir, relative to the page origin. */
 export const ZK_ASSETS_PATH = "managed/hello-world";

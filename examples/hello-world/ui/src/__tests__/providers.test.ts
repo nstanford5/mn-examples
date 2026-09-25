@@ -12,6 +12,21 @@ vi.mock("@midnight-ntwrk/midnight-js-http-client-proof-provider", () => ({
   httpClientProofProvider: vi.fn(() => httpProof),
 }));
 
+// The storage mode is fixed per UI in contract.ts. Override it so both paths
+// are tested whichever one this UI was generated with.
+const storage = vi.hoisted(() => ({ mode: "memory" as "memory" | "persistent" }));
+vi.mock("../midnight/contract", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../midnight/contract")>()),
+  get PRIVATE_STATE_STORAGE() {
+    return storage.mode;
+  },
+}));
+const persistentStore = { kind: "persistent-private-state" };
+vi.mock("../midnight/private-state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../midnight/private-state")>()),
+  persistentPrivateStateProvider: vi.fn(async () => persistentStore),
+}));
+
 const { dappConnectorProofProvider } = await import(
   "@midnight-ntwrk/midnight-js-dapp-connector-proof-provider"
 );
@@ -19,6 +34,7 @@ const { httpClientProofProvider } = await import(
   "@midnight-ntwrk/midnight-js-http-client-proof-provider"
 );
 const { createProviders } = await import("../midnight/providers");
+const { persistentPrivateStateProvider } = await import("../midnight/private-state");
 
 // 32-byte keys in hex. parse*ToHex passes hex through unchanged.
 const COIN_PK = "11".repeat(32);
@@ -41,7 +57,10 @@ function fakeApi(): ConnectedAPI {
 }
 
 describe("createProviders", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storage.mode = "memory";
+  });
 
   it("uses wallet-delegated proving by default", async () => {
     const api = fakeApi();
@@ -83,5 +102,24 @@ describe("createProviders", () => {
     expect(zk.baseURL).toBe(`${window.location.origin}/managed/hello-world`);
     expect(providers.walletProvider.getCoinPublicKey()).toBe(COIN_PK);
     expect(providers.walletProvider.getEncryptionPublicKey()).toBe(ENC_PK);
+  });
+
+  it("keeps private state in memory when PRIVATE_STATE_STORAGE is memory", async () => {
+    const providers = await createProviders(fakeApi(), { mode: "wallet", proofServerUrl: "" });
+    expect(providers.privateStateProvider).not.toBe(persistentStore);
+    expect(persistentPrivateStateProvider).not.toHaveBeenCalled();
+  });
+
+  it("opens the encrypted store for this wallet account when persistent", async () => {
+    storage.mode = "persistent";
+    const proving = { mode: "wallet", proofServerUrl: "" } as const;
+    await expect(createProviders(fakeApi(), proving)).rejects.toThrow(/locked/);
+
+    const providers = await createProviders(fakeApi(), proving, "Correct-Horse-Battery-9");
+    expect(providers.privateStateProvider).toBe(persistentStore);
+    expect(persistentPrivateStateProvider).toHaveBeenCalledWith({
+      accountId: COIN_PK,
+      passphrase: "Correct-Horse-Battery-9",
+    });
   });
 });

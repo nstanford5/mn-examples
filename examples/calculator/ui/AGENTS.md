@@ -7,9 +7,13 @@ one (`examples/calculator/ui`), see `README.md` next to this file.
 
 This file is template-owned. Its source is `templates/ui/AGENTS.md`, and
 every generated UI gets an identical copy. Edit the template, then run
-`yarn new:ui <name> --sync` for each UI. `examples/hello-world/ui` (no
-witnesses) and `examples/calculator/ui` (a witness, custom forms) are the
-worked examples.
+`yarn new:ui <name> --sync` for each UI. The worked examples:
+
+- `examples/hello-world/ui`: no witnesses.
+- `examples/calculator/ui`: a witness, custom forms.
+- `examples/battleship/ui`: constructor args, a private-state factory with
+  arguments, persistent private state, two roles, and a pure circuit used to
+  find "which seat am I".
 
 **Verified against:** `midnight-js-*` 4.1.1, `@midnight-ntwrk/dapp-connector-api`
 4.0.1, Vite 6.4.3, vitest 4.1, React 19, Node 22, Lace on the local devnet.
@@ -37,6 +41,19 @@ Don't claim more than this when you reuse the pattern:
 - **Generic circuit forms** (`components/circuit-form.tsx`): unit-tested, and
   generated panels for every compiled example in the repo typecheck, test and
   build. No form has submitted a real transaction yet.
+- **Persistent private state (battleship/ui), in Chrome, without Lace:**
+  `persistentPrivateStateProvider` wrote a battleship private state to real
+  IndexedDB. After a page reload it read the state back, with `bigint`
+  fields and a byte-identical `Uint8Array` secret key. A wrong passphrase was
+  rejected at unlock with `WrongPassphraseError`. In the same page, the
+  battleship constructor, `acceptGame` (witnesses included) and the pure
+  `getDappPubKey` ran in memory. The in-memory vitest suite replays the whole
+  Node-test game, both cheat attempts included.
+- **Not yet run for battleship:** deploy/accept/shoot/check through Lace, the
+  passphrase card and re-join-after-reload in the full app, and a second
+  profile joining. The new deploy-input slot and non-destructive re-join in
+  `use-deployment.ts` and `deployment-card.tsx` are checked only by
+  typecheck, unit tests and build.
 - Do **not** use `examples/zk-loan/ui` as a reference. It isn't authoritative.
   Use the generated UIs and the plugin docs, and check both against the installed
   types in `node_modules`.
@@ -54,7 +71,7 @@ and swaps only the **providers** for browser versions:
 | ZK config | `NodeZkConfigProvider(zkConfigPath)` | `FetchZkConfigProvider(origin + "/managed/<name>")` |
 | Proofs | `httpClientProofProvider(proofServer)` | `dappConnectorProofProvider(api, zk, CostModel.initialCostModel())` or `httpClientProofProvider` (user toggle) |
 | Wallet/submit | wallet-sdk `WalletFacade` | DApp Connector: `balanceUnsealedTransaction` + `submitTransaction` (hex) |
-| Private state | `levelPrivateStateProvider` | `inMemoryPrivateStateProvider` (lost on reload) |
+| Private state | `levelPrivateStateProvider` (disk) | `--private-state persistent`: the same `levelPrivateStateProvider` on IndexedDB, behind a passphrase; `memory`: `inMemoryPrivateStateProvider` (lost on reload) |
 | Contract calls | `deployContract` / `submitCallTx` in `test/*.test.ts` | the same calls in `<name>-api.ts` |
 
 If the test suite passes, the contract side is right. Most UI bugs are in the
@@ -67,7 +84,7 @@ UIs are scaffolded by a script, not by hand. It is **phase 2**, after
 and `yarn test:local` is green, because it reads the compiled output.
 
 ```bash
-yarn new:ui <name> [--contract <managed-dir>]
+yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]
 yarn install          # the new workspace changes yarn.lock; commit it
 yarn workspace @midnight-ntwrk/example-<name>-ui typecheck
 yarn workspace @midnight-ntwrk/example-<name>-ui test:unit
@@ -86,7 +103,19 @@ witnesses file:
 |---|---|
 | `contract/managed/<c>/compiler/contract-info.json` | provable circuits (union type, one `callTx` wrapper each), their argument types (the panel's generic forms), exported ledger fields, whether witnesses exist |
 | `contract/managed/<c>/contract/index.d.ts` | only whether the constructor takes arguments |
-| `contract/witnesses.ts` | the `create<X>PrivateState` factory (it aborts if the file imports `node:*`) |
+| `contract/managed/<c>/contract/index.d.ts` | also the constructor's parameter list, named in the TODOs |
+| `contract/witnesses.ts` | the `create<X>PrivateState` factory and its parameters (it aborts if the file imports `node:*`) |
+| `contract-info.json` `ledger[].storage` / `.type` | the typed ledger readout: enum member names, Set/List/Map contents |
+
+The create-time choices, `--contract` and `--private-state`, are written to
+`ui/new-ui.json`. `--check` and `--sync` read them back, so they re-render
+exactly what was created (CI runs `--check` with no flags). To change a
+choice, edit `new-ui.json` and `--sync`.
+
+`--private-state` defaults to `persistent` when the contract has witnesses
+and its private-state factory takes arguments (per-user values such as a
+secret key), and to `memory` otherwise. Pass it explicitly when that
+heuristic is wrong for your contract.
 
 It refuses to run when:
 - the example doesn't exist
@@ -101,13 +130,15 @@ It refuses to run when:
 
 Everything except the seed files below comes from `templates/ui/`, rendered by
 name substitution. This covers configs, providers, wallet context, hooks,
-`lib/` (including `circuit-args.ts`), generic components (including
-`deployment-card.tsx`, `circuit-form.tsx` and `hooks/use-deployment.ts`),
-`midnight/contract.ts`, `midnight/providers.ts`, the generic tests and this
-`AGENTS.md`.
+`lib/` (including `circuit-args.ts` and `ledger-format.ts`), generic
+components (including `deployment-card.tsx`, `circuit-form.tsx`,
+`passphrase-card.tsx` and `hooks/use-deployment.ts`), `midnight/contract.ts`,
+`midnight/providers.ts`, `midnight/private-state.ts`, the generic tests and
+this `AGENTS.md`.
 
 - `ui/.template-files` lists the template-owned files as of the last create or
-  sync. Don't edit it.
+  sync. Don't edit it. `ui/new-ui.json` holds the create-time choices (see
+  §1); edit it only to change one, then `--sync`.
 - CI runs `yarn new:ui <name> --check` for every generated UI, then typecheck,
   unit tests and a production build. `--check` fails when an example's copy
   differs from the template, when `.template-files` is missing or out of date,
@@ -121,9 +152,10 @@ name substitution. This covers configs, providers, wallet context, hooks,
 
 `midnight/contract.ts` is generated per contract:
 - circuit union
-- `PRIVATE_STATE_ID`
+- `PRIVATE_STATE_ID` and `PRIVATE_STATE_STORAGE` (`"memory"` or `"persistent"`)
 - private-state type and `createInitialPrivateState`
 - `withVacantWitnesses` or `withWitnesses(witnesses)`
+- re-exports `pureCircuits` (they run locally, with no proof and no tx)
 
 It is still template-owned, because every value in it comes from the compiled
 contract. `providers.ts` keeps the parts that cost debugging time:
@@ -146,8 +178,15 @@ ignore them.
 
   Add projections (hello-world adds `message$`, calculator `result$`) and
   match each step of `src/test/*.test.ts`.
+
+  `join<Name>` reuses the private state already stored for that address, and
+  only builds a fresh one when there is none (see "Rejoining" in §5). When
+  the factory takes arguments, `join<Name>` takes a *factory*
+  (`() => PrivateState`) rather than a value, because a fresh state may mean a
+  fresh secret key, and that should only happen once.
 - **`src/components/<name>-panel.tsx`:** `<DeploymentCard>` (step 1), a
-  best-effort ledger readout, and one generic `<CircuitForm>` per circuit. The
+  typed ledger readout (`lib/ledger-format.ts`: enum names, collection
+  contents), and one generic `<CircuitForm>` per circuit. The
   forms work for arguments of type Uint, Field, Boolean, `Opaque<"string">`,
   Bytes, Enum, and aliases of those (see the table in `lib/circuit-args.ts`).
   A circuit with any other argument type (struct, tuple, vector, ...) gets a
@@ -175,9 +214,16 @@ When deploying needs constructor args, or the private-state factory takes
 arguments, the generator cannot invent values:
 - `deploy<Name>` / `join<Name>` take them as parameters.
 - The panel's deploy and join reject with a `TODO` error until you supply them.
-- The circuits test's construction case is `it.todo`.
+- The circuits test's construction case is `it.todo`. Its comment names the
+  constructor's and the factory's parameters.
 
-Take the values from the example's Node test.
+Take the values from the example's Node test. To collect deploy input from
+the user, type the hook as `useDeployment<Contract, Input>({ deploy, join })`,
+where `deploy(providers, input)` receives it. Pass the form as
+`<DeploymentCard deployment={…} deployForm={<YourForm/>} />`: it replaces the
+plain Deploy button and calls `deployment.deploy(input)`. `join` never takes
+user input, because it also runs unattended when a reload re-joins. See
+battleship's `ShipForm`.
 
 ### 4. Pins (already set by the template; keep them)
 
@@ -207,19 +253,53 @@ drift-checked.
 ### 5. Contracts with private state or witnesses
 
 The generator wires witnesses and the private-state factory.
-`examples/calculator/ui` is the reference: it runs `divide` (which calls the
-`divMod` witness) in memory in the browser. Deploying and calling through Lace
-with witnesses has **not** been confirmed yet.
+`examples/calculator/ui` runs a stateless witness. `examples/battleship/ui`
+runs witnesses that read and update per-player private state (a secret key
+and ship cells).
 
-- **Lost on reload:** `inMemoryPrivateStateProvider` keeps state only for the
-  page's lifetime. If the contract's correctness depends on private state
-  surviving (secret keys, commitments' randomness, a player's board), a reload
-  loses it and the user can no longer act. Say so in the UI, or implement an
-  encrypted persistent provider (e.g. IndexedDB). Don't store secrets in
-  `localStorage`.
-- **Joining gets a fresh private state:** `findDeployedContract` with
-  `initialPrivateState` installs a new private state for that id. A second
-  browser that joins has its own private state, not the deployer's.
+- **Choose the store** with `--private-state` (§1). Losing private state
+  locks the user out when it holds a secret key that is their on-chain
+  identity, a commitment's opening, or anything the contract later checks
+  against a commitment. Use `persistent` for those. `memory` is fine when
+  the state is throwaway or re-derivable.
+- **`persistent`** (`midnight/private-state.ts`) is midnight-js's own
+  `levelPrivateStateProvider`. In the browser, `level` resolves to
+  `browser-level` (IndexedDB). It is AES-GCM encrypted with the `webcrypto`
+  backend, and scoped by the wallet's shielded coin public key, so each Lace
+  account has its own store. The template adds:
+  - a `PassphraseCard` that App shows instead of the panel until unlocked.
+    The passphrase is held in React state only; never put it in storage.
+  - a **canary** entry. The provider never checks the password until it
+    decrypts something, so without the canary a wrong passphrase would
+    surface later as an opaque AES-GCM failure in the middle of a tx.
+  - the passphrase policy (`validatePassword`: 16+ chars, 3 character
+    classes, no runs or sequences), checked in the card before unlocking.
+  - **no recovery**: clearing site data or forgetting the passphrase loses
+    the state (the provider's own warning). Say so in the UI.
+  - a lazy `import()`. With `memory`, `PRIVATE_STATE_STORAGE` is a constant,
+    so Rollup drops the import and `level` isn't bundled at all.
+- **Rejoining must not clobber private state.** `findDeployedContract`
+  *overwrites* whatever is stored under `privateStateId` whenever it is
+  passed `initialPrivateState` (`setOrGetInitialPrivateState` in
+  `midnight-js-contracts`). With a persistent store, that replaces the
+  player's secret key on every reload. The generated `join<Name>` checks
+  `privateStateProvider.get(PRIVATE_STATE_ID)` first and omits
+  `initialPrivateState` when a state exists. Keep that if you rewrite it.
+- **A failed automatic re-join keeps the address.** `useDeployment` no longer
+  forgets the remembered address when a re-join fails: the indexer may just
+  be down, and the address may be the user's only way back to their game.
+  The card shows Retry and Forget.
+- **Witness updates are stored after each finalized call** (midnight-js sets
+  `nextPrivateState`). So a witness that records user input, like
+  battleship's `localSetBoard` storing player 2's ships during `acceptGame`,
+  persists without any UI code. The deploy is different: it stores the
+  `initialPrivateState` you passed, not the constructor's output.
+- **Joining gets a fresh private state** when the browser has none for that
+  address. A second browser that joins has its own state, not the
+  deployer's.
+- **Pure circuits** (`pureCircuits`, re-exported from `contract.ts`) run
+  locally. Use them to derive what the ledger stores from private state, e.g.
+  battleship's `roleOf` compares `getDappPubKey(sk)` with `player1`/`player2`.
 - **Multiple contracts** (e.g. `shielded-chips`): one `CompiledContract`, one
   `ZK_ASSETS_PATH`, and one `FetchZkConfigProvider` per contract. `copy:zk`
   copies each `managed/<contract>/{keys,zkir}`. Build a providers bundle per
@@ -280,6 +360,12 @@ suites' DUST.
   last overload, so a wrapper typed with it demands a `TransactionContext`
   first. Derive argument types from `Contract["provableCircuits"][c]` minus the
   context instead (`CircuitArgs` in the generated api file).
+- **`findDeployedContract` overwrites private state** when given
+  `initialPrivateState`; see §5 "Rejoining".
+- **Contract bounds aren't type bounds:** a generic form for `Uint<8>` allows
+  0–255, but a contract may assert 1–20 (battleship). The circuit's own check
+  still rejects bad input, with the raw assert message. Pre-check in the panel,
+  and test the pre-check against the circuits over an edge grid.
 - **Wide `Uint` bounds:** `contract-info.json` stores `maxval` as a JSON
   number, and `Uint<64>` and wider exceed 2^53. `JSON.parse` silently rounds
   them. The generator reads the exact source text instead; do the same if you
@@ -317,10 +403,20 @@ Run the checks in order, and report which ones you actually ran.
      m.ledger(c.impureCircuits.<circuit>(ctx, ...args).context.currentQueryContext.state);
      ```
    - `fetch('/managed/<name>/keys/<circuit>.verifier')` returns binary data,
-     not `text/html`.
+     not `text/html`. (Vite may send no content-type at all; that's fine.
+     Check that the byte length matches the file.)
+   - With `persistent` private state: in the console,
+     `persistentPrivateStateProvider({ accountId, passphrase })` from
+     `/src/midnight/private-state.ts`, `setContractAddress`, `set` a state,
+     reload, open it again and `get` it back. Then check that a wrong
+     passphrase throws `WrongPassphraseError`. Delete the test database
+     afterwards (`indexedDB.deleteDatabase("level-js-<name>-ui-private-state")`).
 7. With the wallet (needs a human for the approvals):
    - `yarn env:up`, then `yarn fund:wallet <mn_dust_…>`.
    - Deploy, call each circuit, and watch the ledger update, in both proving
      modes.
    - Join from a second profile.
+   - With `persistent` private state: reload mid-use. After the passphrase,
+     the page re-joins and the user can still act. A wrong passphrase is
+     refused.
    - Then repeat on preprod.
