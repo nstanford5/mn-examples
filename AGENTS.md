@@ -73,7 +73,7 @@ yarn test:preprod        # every suite, sequentially (they share those wallets)
 
 | Example | Teaches |
 |---|---|
-| `hello-world` | Environment smoke test; minimal contract + test harness; zero-setup fast-sync wallet |
+| `hello-world` | Environment smoke test; minimal contract + test harness; zero-setup fast-sync wallet; browser frontend (`ui/`: Lace connect, deploy/join, live ledger, wallet or local proving) |
 | `calculator` | Public `ledger` value updated by arithmetic circuits; a `divMod` witness verified on-chain (verify-off-chain-work pattern) |
 | `private-party` | Private on-chain data, access control, unshielded (NIGHT), DUST sponsorship |
 | `battleship` | Compact contract as a state machine, role-based access control, private state, on-chain verification of off-chain data |
@@ -105,5 +105,7 @@ Each example has its own `AGENTS.md` with specifics.
 - Extend `../../tsconfig.base.json` in the example `tsconfig.json`.
 - Provide `compile`, `test`, `test:local`, `env:up`, `env:down`, `wait:dust`
   scripts so the CI matrix and root aggregates work unchanged.
+- Adding a browser frontend to an example: follow `examples/hello-world/ui/AGENTS.md`
+  (the reference UI pattern: pins, provider swap, verification checklist).
 - Add meticulous comments in contracts and witnesses explaining the *how* and
   *why* — these examples are read by agents as much as by people.
