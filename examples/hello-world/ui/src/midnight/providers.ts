@@ -8,7 +8,7 @@
 //   publicDataProvider    indexer from src/config.ts    indexer URIs from the wallet's config
 //   zkConfigProvider      NodeZkConfigProvider (disk)   FetchZkConfigProvider (HTTP, /managed/…)
 //   proofProvider         local proof server            wallet-delegated OR local proof server
-//   privateStateProvider  LevelDB                       in-memory, session-only (./private-state.ts)
+//   privateStateProvider  LevelDB (disk)                LevelDB on IndexedDB, or in-memory (./private-state.ts)
 //   walletProvider        wallet-sdk WalletFacade       Lace via the DApp Connector API
 //   midnightProvider      wallet-sdk WalletFacade       Lace via the DApp Connector API
 import type { ConnectedAPI } from "@midnight-ntwrk/dapp-connector-api";
@@ -36,11 +36,12 @@ import {
 } from "@midnight-ntwrk/midnight-js-utils";
 import {
   PRIVATE_STATE_ID,
+  PRIVATE_STATE_STORAGE,
   ZK_ASSETS_PATH,
   type HelloWorldCircuits,
   type HelloWorldPrivateState,
 } from "./contract";
-import { inMemoryPrivateStateProvider } from "./private-state";
+import { inMemoryPrivateStateProvider, persistentPrivateStateProvider } from "./private-state";
 
 export type HelloWorldProviders = MidnightProviders<
   HelloWorldCircuits,
@@ -66,9 +67,16 @@ export interface ProvingOptions {
 
 export const DEFAULT_PROOF_SERVER_URL = "http://127.0.0.1:6300";
 
+/**
+ * Build the providers for one wallet connection.
+ *
+ * `passphrase` unlocks the encrypted private-state store and is required when
+ * PRIVATE_STATE_STORAGE is "persistent"; it is ignored for "memory".
+ */
 export async function createProviders(
   api: ConnectedAPI,
   proving: ProvingOptions,
+  passphrase: string | null = null,
 ): Promise<HelloWorldProviders> {
   // The wallet decides which network we're on. Everything below (indexer
   // endpoints, network id for address encoding) follows from its config, so
@@ -141,17 +149,30 @@ export async function createProviders(
     },
   };
 
+  const privateStateProvider = await createPrivateStateProvider(coinPublicKey, passphrase);
+
   return {
-    privateStateProvider: inMemoryPrivateStateProvider<
-      typeof PRIVATE_STATE_ID,
-      HelloWorldPrivateState
-    >(),
+    privateStateProvider,
     publicDataProvider,
     zkConfigProvider,
     proofProvider,
     walletProvider,
     midnightProvider,
   };
+}
+
+async function createPrivateStateProvider(accountId: string, passphrase: string | null) {
+  if (PRIVATE_STATE_STORAGE === "memory") {
+    return inMemoryPrivateStateProvider<typeof PRIVATE_STATE_ID, HelloWorldPrivateState>();
+  }
+  if (passphrase === null) {
+    throw new Error("The private-state store is locked: enter its passphrase first.");
+  }
+  // Scoped per wallet account: switching accounts in Lace switches stores.
+  return persistentPrivateStateProvider<typeof PRIVATE_STATE_ID, HelloWorldPrivateState>({
+    accountId,
+    passphrase,
+  });
 }
 
 async function createProofProvider(

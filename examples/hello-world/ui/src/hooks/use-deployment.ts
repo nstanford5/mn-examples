@@ -8,23 +8,44 @@ import { useWallet } from "@/hooks/use-wallet";
 
 const ADDRESS_KEY_PREFIX = "hello-world-ui:contract-address:";
 
-export interface DeploymentOps<T> {
-  deploy: (providers: HelloWorldProviders) => Promise<{ contract: T; address: ContractAddress }>;
+/**
+ * The example's deploy and join, from its seed api file.
+ *
+ * `I` is whatever deploying needs from the user (constructor args, inputs to
+ * the initial private state). It defaults to `void`: the no-input case, where
+ * <DeploymentCard> renders a plain "Deploy" button. When it isn't void, the
+ * panel passes <DeploymentCard deployForm={...}> and its form calls
+ * `deployment.deploy(input)`.
+ *
+ * `join` takes no user input because it also runs unattended: on reload the
+ * remembered address is re-joined automatically. With persistent private
+ * state it should reuse the stored state when there is one (see
+ * joinHelloWorld in the api file).
+ */
+export interface DeploymentOps<T, I = void> {
+  deploy: (providers: HelloWorldProviders, input: I) => Promise<{ contract: T; address: ContractAddress }>;
   join: (providers: HelloWorldProviders, address: ContractAddress) => Promise<T>;
 }
 
-export interface Deployment<T> {
+export interface Deployment<T, I = void> {
   providers: HelloWorldProviders | null;
   providersError: string | null;
   networkId: string | null;
   /** Handle for callTx; null until deployed/joined with the current providers. */
   contract: T | null;
+  /**
+   * The deployed/joined address, or the remembered one while it is being (or
+   * failed to be) re-joined. `contract === null` with an address set means the
+   * re-join hasn't succeeded; `error` says why and `rejoin()` retries.
+   */
   address: ContractAddress | null;
   /** Label of the operation in flight ("deploying", "joining", or a run() kind). */
   busy: string | null;
   error: string | null;
-  deploy: () => Promise<void>;
+  deploy: (input: I) => Promise<void>;
   join: (address: string) => Promise<void>;
+  /** Retry joining the remembered address (after a failed automatic re-join). */
+  rejoin: () => Promise<void>;
   forget: () => void;
   /** Run an async operation with the shared busy/error state. */
   run: (kind: string, fn: () => Promise<void>) => Promise<void>;
@@ -37,8 +58,12 @@ export interface Deployment<T> {
  * Contract handles are bound to one providers bundle, so when the providers
  * change (new wallet connection or proving mode) the remembered address is
  * re-joined with the new bundle.
+ *
+ * A failed re-join keeps the address (the indexer may just be down, and with
+ * persistent private state that address is the key to the user's game or
+ * funds). The card offers Retry and Forget; only Forget drops it.
  */
-export function useDeployment<T>(ops: DeploymentOps<T>): Deployment<T> {
+export function useDeployment<T, I = void>(ops: DeploymentOps<T, I>): Deployment<T, I> {
   const { networkId } = useWallet();
   const { providers, error: providersError } = useMidnightProviders();
   const addressKey = `${ADDRESS_KEY_PREFIX}${networkId ?? "unknown"}`;
@@ -53,35 +78,37 @@ export function useDeployment<T>(ops: DeploymentOps<T>): Deployment<T> {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const rejoinSaved = useCallback(
+    (isCancelled: () => boolean) => {
+      if (!providers) return;
+      const saved = storage.get(addressKey);
+      setAddress(saved);
+      if (!saved) return;
+      setBusy("joining");
+      setError(null);
+      opsRef.current
+        .join(providers, saved)
+        .then((c) => {
+          if (isCancelled()) return;
+          setContract(c);
+        })
+        .catch((err: unknown) => {
+          if (isCancelled()) return;
+          setError(errorMessage(err, `Could not re-join ${saved}`));
+        })
+        .finally(() => !isCancelled() && setBusy(null));
+    },
+    [providers, addressKey],
+  );
+
   useEffect(() => {
     setContract(null);
-    if (!providers) return;
-    const saved = storage.get(addressKey);
-    if (!saved) {
-      setAddress(null);
-      return;
-    }
     let cancelled = false;
-    setBusy("joining");
-    opsRef.current
-      .join(providers, saved)
-      .then((c) => {
-        if (cancelled) return;
-        setContract(c);
-        setAddress(saved);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        storage.remove(addressKey);
-        setAddress(null);
-        setError(errorMessage(err, `Could not re-join ${saved}`));
-      })
-      .finally(() => !cancelled && setBusy(null));
+    rejoinSaved(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [providers, addressKey]);
+  }, [rejoinSaved]);
 
   const run = useCallback(async (kind: string, fn: () => Promise<void>) => {
     setBusy(kind);
@@ -95,10 +122,10 @@ export function useDeployment<T>(ops: DeploymentOps<T>): Deployment<T> {
     }
   }, []);
 
-  const deploy = () =>
+  const deploy = (input: I) =>
     run("deploying", async () => {
       if (!providers) return;
-      const { contract: c, address: a } = await opsRef.current.deploy(providers);
+      const { contract: c, address: a } = await opsRef.current.deploy(providers, input);
       storage.set(addressKey, a);
       setContract(c);
       setAddress(a);
@@ -114,10 +141,13 @@ export function useDeployment<T>(ops: DeploymentOps<T>): Deployment<T> {
       setAddress(a);
     });
 
+  const rejoin = async () => rejoinSaved(() => false);
+
   const forget = () => {
     storage.remove(addressKey);
     setContract(null);
     setAddress(null);
+    setError(null);
   };
 
   return {
@@ -130,6 +160,7 @@ export function useDeployment<T>(ops: DeploymentOps<T>): Deployment<T> {
     error,
     deploy,
     join,
+    rejoin,
     forget,
     run,
   };

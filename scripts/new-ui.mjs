@@ -18,9 +18,13 @@
 // whose contract already compiles and whose tests pass (phase 1 is
 // `yarn new:example`). Zero dependencies — Node built-ins only.
 //
-//   yarn new:ui <name> [--contract <managed-dir>]   scaffold examples/<name>/ui
+//   yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]
+//                                                   scaffold examples/<name>/ui
 //   yarn new:ui <name> --check                      diff template-owned files (CI)
 //   yarn new:ui <name> --sync                       rewrite template-owned files
+//
+// The create-time choices (--contract, --private-state) are recorded in
+// ui/new-ui.json, so --check and --sync re-render exactly what was created.
 //
 // Everything is derived from the compiled contract, never from memory:
 //   contract/managed/<c>/compiler/contract-info.json  circuits, witnesses, ledger
@@ -82,6 +86,9 @@ const KNOWN_TOKENS = [
   '__DEPLOY_ARGS__',
   '__JOIN_PARAMS__',
   '__INITIAL_PS__',
+  '__JOIN_INITIAL_PS__',
+  '__PRIVATE_STATE_STORAGE__',
+  '__PRIVATE_STATE_STORAGE_DOC__',
   '__CIRCUIT_WRAPPERS__',
   '__PANEL_API_IMPORTS__',
   '__LEDGER_FIELDS__',
@@ -94,10 +101,16 @@ const KNOWN_TOKENS = [
 function usage() {
   console.log(
     [
-      'Usage: yarn new:ui <name> [--contract <managed-dir>] [--check | --sync]',
+      'Usage: yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]',
+      '       yarn new:ui <name> --check | --sync',
       '',
-      '  <name>        existing example under examples/ (compile it first)',
-      '  --contract    which contract/managed/<dir> to use when there are several',
+      '  <name>           existing example under examples/ (compile it first)',
+      '  --contract       which contract/managed/<dir> to use when there are several',
+      '  --private-state  where the browser keeps private state:',
+      '                     memory      in memory, lost on reload',
+      '                     persistent  encrypted IndexedDB, unlocked by a passphrase',
+      '                   default: persistent when the private-state factory takes',
+      '                   arguments (per-user secrets), else memory',
       '  --check       compare template-owned files in examples/<name>/ui with the',
       '                template; exit 1 on any difference (seed files are ignored)',
       '  --sync        rewrite template-owned files in examples/<name>/ui (seeds untouched)',
@@ -114,10 +127,13 @@ if (argv.includes('-h') || argv.includes('--help')) {
 const positionals = [];
 const flags = new Set();
 let contractFlag = null;
+let privateStateFlag = null;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--contract') contractFlag = argv[++i] ?? fail('--contract needs a value');
   else if (a.startsWith('--contract=')) contractFlag = a.slice('--contract='.length);
+  else if (a === '--private-state') privateStateFlag = argv[++i] ?? fail('--private-state needs a value');
+  else if (a.startsWith('--private-state=')) privateStateFlag = a.slice('--private-state='.length);
   else if (a === '--check' || a === '--sync') flags.add(a);
   else if (a.startsWith('-')) fail(`unknown flag ${a}`);
   else positionals.push(a);
@@ -130,6 +146,9 @@ if (flags.size > 1) fail('--check and --sync are mutually exclusive');
 const mode = flags.has('--check') ? 'check' : flags.has('--sync') ? 'sync' : 'create';
 const name = positionals[0];
 if (!NAME_RE.test(name)) fail(`invalid name '${name}' (kebab-case, e.g. hello-world)`);
+if (privateStateFlag !== null && !['memory', 'persistent'].includes(privateStateFlag)) {
+  fail(`--private-state must be memory or persistent, not '${privateStateFlag}'`);
+}
 
 // --- phase-1 gate ------------------------------------------------------------
 const exampleDir = path.join(EXAMPLES_DIR, name);
@@ -143,6 +162,25 @@ if (mode === 'create' && fs.existsSync(uiDir)) {
 }
 if (mode !== 'create' && !fs.existsSync(uiDir)) {
   fail(`examples/${name}/ui does not exist — nothing to ${mode}.`);
+}
+
+// Create-time choices, recorded so --check/--sync render the same thing. A UI
+// created before new-ui.json existed has none; --sync writes it.
+const CONFIG = 'new-ui.json';
+const configPath = path.join(uiDir, CONFIG);
+const savedConfig =
+  mode !== 'create' && fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : null;
+if (savedConfig && mode !== 'create') {
+  for (const [flag, value, saved] of [
+    ['--contract', contractFlag, savedConfig.contract],
+    ['--private-state', privateStateFlag, savedConfig.privateState],
+  ]) {
+    if (value !== null && value !== saved) {
+      fail(`${flag} ${value} conflicts with ui/${CONFIG} (${saved}). Edit ${CONFIG} to change it, then --sync.`);
+    }
+  }
+  contractFlag = savedConfig.contract;
+  privateStateFlag = savedConfig.privateState;
 }
 
 const managedRoot = path.join(exampleDir, 'contract', 'managed');
@@ -219,7 +257,11 @@ const circuits = info.circuits
     };
   });
 const formCircuits = circuits.filter((c) => c.specs);
-const ledgerFields = info.ledger.filter((l) => l.exported).map((l) => l.name);
+/** Enum member names of a ledger cell or Set/List element type, through aliases. */
+const enumValuesOf = (t) => (!t ? null : t['type-name'] === 'Alias' ? enumValuesOf(t.type) : t['type-name'] === 'Enum' ? t.elements : null);
+const ledgerFields = info.ledger
+  .filter((l) => l.exported)
+  .map((l) => ({ name: l.name, storage: l.storage ?? 'Cell', enumValues: enumValuesOf(l.type) }));
 const hasWitnesses = info.witnesses.length > 0;
 
 // contract-info.json does not describe the constructor. The generated
@@ -231,12 +273,19 @@ if (!dts.includes('initialState(context: __compactRuntime.ConstructorContext<PS>
 const hasCtorArgs = !dts.includes(
   'initialState(context: __compactRuntime.ConstructorContext<PS>): __compactRuntime.ConstructorResult<PS>;',
 );
+// Only for TODO comments: e.g. "_x1_0: bigint, _x2_0: bigint".
+const ctorParams = hasCtorArgs
+  ? (dts.match(/initialState\(context: __compactRuntime\.ConstructorContext<PS>,\s*([^)]*)\)/)?.[1] ?? '...')
+      .replace(/\s+/g, ' ')
+      .trim()
+  : '';
 
 // With witnesses, the browser imports contract/witnesses.ts as is: it must
 // be Node-free and export a create<X>PrivateState factory (the phase-1
 // template convention).
 let factory = null;
 let factoryTakesArgs = false;
+let factoryParams = '';
 let witnessesExport = null;
 if (hasWitnesses) {
   const witnessesPath = path.join(exampleDir, 'contract', 'witnesses.ts');
@@ -252,7 +301,8 @@ if (hasWitnesses) {
     fail(`examples/${name}/contract/witnesses.ts has no \`export const create<X>PrivateState = (...) =>\` factory.`);
   }
   factory = m[1];
-  factoryTakesArgs = m[2].trim() !== '';
+  factoryParams = m[2].replace(/\s+/g, ' ').replace(/,\s*$/, '').trim();
+  factoryTakesArgs = factoryParams !== '';
   // `witnesses`, or `<contract>Witnesses` when one file serves several
   // contracts (shielded-chips: rouletteWitnesses, chipsWitnesses).
   const perContract = `${managed.replace(/[-_](\w)/g, (_, c) => c.toUpperCase())}Witnesses`;
@@ -265,6 +315,10 @@ if (hasWitnesses) {
 const witnessesSpecifier = witnessesExport === 'witnesses' ? 'witnesses' : `${witnessesExport} as witnesses`;
 // Can the UI build the initial private state on its own?
 const psAuto = !factoryTakesArgs;
+// A factory with parameters builds per-user private state (secret keys,
+// hidden values): losing it on reload usually locks the user out.
+const privateState = privateStateFlag ?? (hasWitnesses && factoryTakesArgs ? 'persistent' : 'memory');
+const configContent = `${JSON.stringify({ contract: managed, privateState }, null, 2)}\n`;
 
 const names = deriveNames(name);
 const { Name } = names;
@@ -276,7 +330,9 @@ const taken = new Set([
   'createInitialPrivateState', 'ConstructorArgs', `Compiled${Name}Contract`, `deploy${Name}`,
   `join${Name}`, `${Name}Contract`,
   // the panel imports the wrappers next to these
-  'CIRCUITS', 'CALLS', 'CircuitForm', 'LEDGER_FIELDS', 'formatValue', 'useMemo', 'useContractState',
+  'pureCircuits', 'PRIVATE_STATE_STORAGE',
+  'CIRCUITS', 'CALLS', 'CircuitForm', 'LEDGER_FIELDS', 'formatLedgerValue', 'LedgerField', 'useMemo',
+  'useContractState',
   'useDeployment', 'DeploymentCard', 'Card', 'CardContent', 'CardDescription', 'CardHeader',
   'CardTitle', 'ArgSpec', 'CircuitSpec',
 ]);
@@ -323,8 +379,10 @@ function testBody() {
           '  });',
         ]
       : [
-          `  // TODO: constructing the contract needs ${needs}; take values from the`,
-          '  // Node test in examples/__name__/src/test/.',
+          `  // TODO: constructing the contract needs ${needs}:`,
+          ...(hasCtorArgs ? [`  //   constructor:   contract.initialState(context, ${ctorParams})`] : []),
+          ...(!psAuto ? [`  //   private state: ${factory}(${factoryParams})`] : []),
+          '  // Take the values from the Node test in examples/__name__/src/test/.',
           '  it.todo("constructs and decodes the initial ledger");',
         ]),
     ...(circuits.length
@@ -376,7 +434,7 @@ const blocks = {
     ? [
         '/**',
         ' * Private state is whatever examples/__name__/contract/witnesses.ts builds.',
-        ' * It lives in memory only (./private-state.ts), so a reload loses it.',
+        ' * PRIVATE_STATE_STORAGE below says where it is kept (./private-state.ts).',
         ' */',
         `export type __Name__PrivateState = ReturnType<typeof ${factory}>;`,
         `export const createInitialPrivateState = ${factory};`,
@@ -404,8 +462,16 @@ const blocks = {
     (psAuto ? '' : '\n  initialPrivateState: __Name__PrivateState,') +
     (hasCtorArgs ? '\n  args: ConstructorArgs,' : ''),
   __DEPLOY_ARGS__: hasCtorArgs ? '\n    args,' : '',
-  __JOIN_PARAMS__: psAuto ? '' : '\n  initialPrivateState: __Name__PrivateState,',
+  // join only builds a fresh private state when none is stored, so it takes a
+  // factory rather than a value (a fresh one may mean a fresh secret key).
+  __JOIN_PARAMS__: psAuto ? '' : '\n  initialPrivateState: () => __Name__PrivateState,',
   __INITIAL_PS__: psAuto ? 'initialPrivateState: createInitialPrivateState()' : 'initialPrivateState',
+  __JOIN_INITIAL_PS__: psAuto ? 'createInitialPrivateState()' : 'initialPrivateState()',
+  __PRIVATE_STATE_STORAGE__: privateState,
+  __PRIVATE_STATE_STORAGE_DOC__:
+    privateState === 'persistent'
+      ? 'encrypted in IndexedDB,\n * unlocked by a passphrase each session, so it survives reloads.'
+      : 'in memory, so a reload\n * loses it.',
   __CIRCUIT_WRAPPERS__: circuits.length === 0 ? '' : [
     '',
     '/**',
@@ -443,7 +509,16 @@ const blocks = {
     .filter(Boolean)
     .map((i) => `\n  ${i},`)
     .join('') + '\n',
-  __LEDGER_FIELDS__: JSON.stringify(ledgerFields).replaceAll('","', '", "'),
+  __LEDGER_FIELDS__: ledgerFields.length
+    ? `[\n${ledgerFields
+        .map(
+          (l) =>
+            `  { name: ${JSON.stringify(l.name)}, storage: ${JSON.stringify(l.storage)}` +
+            (l.enumValues ? `, enumValues: [${l.enumValues.map((e) => JSON.stringify(e)).join(', ')}]` : '') +
+            ' },',
+        )
+        .join('\n')}\n]`
+    : '[]',
   __CIRCUIT_LIST__: circuits.length
     ? `[\n${circuits
         .map((c) =>
@@ -471,14 +546,17 @@ const blocks = {
     ...(!hasCtorArgs && psAuto
       ? ['    deploy: deploy__Name__,']
       : [
-          `    // TODO: deploy__Name__ needs ${needs} (see __name__-api.ts and the`,
-          '    // Node test for values). Collect them, e.g. from a form, and pass them here.',
+          `    // TODO: deploy__Name__ needs ${needs}`,
+          '    // (see __name__-api.ts, and the Node test for values). Collect them in a form passed as',
+          '    // <DeploymentCard deployForm={...}> that calls deployment.deploy(input), and',
+          '    // type the hook as useDeployment<__Name__Contract, YourInput>({ ... }).',
           `    deploy: () => Promise.reject(new Error("TODO: supply ${needs} to deploy__Name__")),`,
         ]),
     ...(psAuto
       ? ['    join: join__Name__,']
       : [
-          "    // TODO: join__Name__ needs this browser's initial private state.",
+          "    // TODO: join__Name__ needs a factory for this browser's initial private state",
+          '    // (only called when none is stored yet), e.g. (p, a) => join__Name__(p, a, () => ...).',
           '    join: () => Promise.reject(new Error("TODO: supply the initial private state to join__Name__")),',
         ]),
   ].join('\n'),
@@ -542,6 +620,8 @@ if (mode === 'check') {
   const problems = [];
   if (manifestOnDisk === null) problems.push(`  ${MANIFEST}  (missing)`);
   else if (manifestOnDisk !== manifestContent) problems.push(`  ${MANIFEST}  (out of date)`);
+  if (savedConfig === null) problems.push(`  ${CONFIG}  (missing)`);
+  else if (fs.readFileSync(configPath, 'utf8') !== configContent) problems.push(`  ${CONFIG}  (not canonical)`);
   for (const f of stale) problems.push(`  ${f}  (no longer in templates/ui)`);
   if (drift.length === 0 && problems.length === 0) {
     console.log(`✔ examples/${name}/ui matches templates/ui (${files.length} template-owned files)`);
@@ -559,7 +639,9 @@ if (mode === 'check') {
       '  example-specific, move it into a seed file (the api, panel, or circuits test).',
   );
   if (problems.length) {
-    console.error(`  A missing/out-of-date ${MANIFEST} or a stale file is fixed by \`yarn new:ui ${name} --sync\`.`);
+    console.error(
+      `  A missing/out-of-date ${MANIFEST} or ${CONFIG}, or a stale file, is fixed by \`yarn new:ui ${name} --sync\`.`,
+    );
   }
   process.exit(1);
 }
@@ -578,6 +660,7 @@ function firstDifference(expected, actual) {
 
 const written = writeFiles(uiDir, files).map((p) => path.relative(REPO_ROOT, p));
 fs.writeFileSync(path.join(uiDir, MANIFEST), manifestContent);
+fs.writeFileSync(configPath, configContent);
 
 if (mode === 'sync') {
   for (const f of stale) fs.rmSync(path.join(uiDir, ...f.split('/')));
@@ -593,7 +676,8 @@ console.log(`\n✔ Scaffolded examples/${name}/ui from contract/managed/${manage
 console.log(
   `  circuits: ${circuits.map((c) => c.name).join(', ') || '(none)'}` +
     `\n  witnesses: ${hasWitnesses ? `yes (private state from ${factory}${factoryTakesArgs ? ', needs args' : ''})` : 'none'}` +
-    `\n  constructor args: ${hasCtorArgs ? 'yes' : 'none'}`,
+    `\n  constructor args: ${hasCtorArgs ? `yes (${ctorParams})` : 'none'}` +
+    `\n  private state storage: ${privateState}${privateStateFlag === null ? ' (default)' : ''}`,
 );
 console.log(`\n  ${written.length} files created. Seed files (yours to edit):`);
 for (const f of files.filter((f) => SEED_FILES.has(f.templateRel))) {

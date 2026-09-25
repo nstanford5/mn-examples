@@ -7,12 +7,15 @@ src/App.tsx
 src/__tests__/App.test.tsx
 src/__tests__/circuit-form.test.tsx
 src/__tests__/errors.test.ts
+src/__tests__/ledger-format.test.ts
+src/__tests__/private-state.test.ts
 src/__tests__/providers.test.ts
 src/__tests__/setup.ts
 src/__tests__/wallet-context.test.tsx
 src/components/circuit-form.tsx
 src/components/deployment-card.tsx
 src/components/network-badge.tsx
+src/components/passphrase-card.tsx
 src/components/proving-settings.tsx
 src/components/ui/badge.tsx
 src/components/ui/button.tsx
@@ -26,6 +29,7 @@ src/hooks/use-wallet.ts
 src/index.css
 src/lib/circuit-args.ts
 src/lib/errors.ts
+src/lib/ledger-format.ts
 src/lib/storage.ts
 src/lib/utils.ts
 src/main.tsx

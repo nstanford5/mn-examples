@@ -13,6 +13,8 @@ import {
   type ProvingMode,
   type ProvingOptions,
 } from "@/midnight/providers";
+import { PRIVATE_STATE_STORAGE } from "@/midnight/contract";
+import { WrongPassphraseError } from "@/midnight/private-state";
 import { useWallet } from "@/hooks/use-wallet";
 import { errorMessage } from "@/lib/errors";
 import { storage } from "@/lib/storage";
@@ -25,6 +27,14 @@ interface MidnightProvidersContextValue {
   error: string | null;
   proving: ProvingOptions;
   setProving: (next: ProvingOptions) => void;
+  /**
+   * True while PRIVATE_STATE_STORAGE is "persistent" and no passphrase has
+   * been accepted this session. Providers stay null until unlock() succeeds.
+   */
+  locked: boolean;
+  /** Why the last unlock() failed (e.g. wrong passphrase), if it did. */
+  unlockError: string | null;
+  unlock: (passphrase: string) => void;
 }
 
 const MidnightProvidersContext =
@@ -49,6 +59,10 @@ export function MidnightProvidersProvider({ children }: { children: ReactNode })
   const [providers, setProviders] = useState<HelloWorldProviders | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [proving, setProvingState] = useState<ProvingOptions>(initialProving);
+  // Held in memory only: never written to storage. A reload asks again.
+  const [passphrase, setPassphrase] = useState<string | null>(null);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const locked = PRIVATE_STATE_STORAGE === "persistent" && passphrase === null;
 
   const setProving = useCallback((next: ProvingOptions) => {
     setProvingState(next);
@@ -56,7 +70,7 @@ export function MidnightProvidersProvider({ children }: { children: ReactNode })
   }, []);
 
   useEffect(() => {
-    if (status !== "connected" || !connectedApi) {
+    if (status !== "connected" || !connectedApi || locked) {
       setProviders(null);
       setError(null);
       return;
@@ -64,25 +78,47 @@ export function MidnightProvidersProvider({ children }: { children: ReactNode })
 
     let cancelled = false;
     setProviders(null);
-    createProviders(connectedApi, proving)
+    createProviders(connectedApi, proving, passphrase)
       .then((p) => {
         if (!cancelled) {
           setProviders(p);
           setError(null);
+          setUnlockError(null);
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(errorMessage(err, "Failed to create providers"));
+        if (cancelled) return;
+        if (err instanceof WrongPassphraseError) {
+          // Back to the passphrase prompt, with the reason.
+          setPassphrase(null);
+          setUnlockError(err.message);
+        } else {
+          setError(errorMessage(err, "Failed to create providers"));
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [connectedApi, status, proving]);
+  }, [connectedApi, status, proving, passphrase, locked]);
+
+  const unlock = useCallback((next: string) => {
+    setUnlockError(null);
+    setPassphrase(next);
+  }, []);
 
   return (
     <MidnightProvidersContext.Provider
-      value={{ providers, isReady: providers !== null, error, proving, setProving }}
+      value={{
+        providers,
+        isReady: providers !== null,
+        error,
+        proving,
+        setProving,
+        locked,
+        unlockError,
+        unlock,
+      }}
     >
       {children}
     </MidnightProvidersContext.Provider>
