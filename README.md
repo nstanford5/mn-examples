@@ -24,7 +24,7 @@ mn-examples/
 │   ├── secret-message/   # private message: publish a hash commitment, not the plaintext
 │   ├── zk-loan/   # private credit scoring: verify a signed attestation in-circuit, disclose only the outcome
 │   ├── shielded-chips/   # shielded tokens: MIP-0011 chips + a roulette that custodies and pays out coins privately
-│   └── battleship/       # Compact contract as a state machine, RBAC, private state
+│   └── battleship/       # Compact contract as a state machine, RBAC, private state + browser UI (ui/)
 ├── packages/
 │   └── fast-sync/        # shared remote-network wallet harness (pre-seed, .env, funding gate)
 ├── preseed/              # pre-seed reference bundles, per network
