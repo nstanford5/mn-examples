@@ -9,11 +9,25 @@
 // `yarn dev` and `yarn build` run it first (Yarn 4 does not run pre* scripts).
 // The source is the gitignored output of `yarn compile` in examples/hello-world,
 // and the destination (public/managed/) is gitignored too.
-import { cpSync, existsSync, rmSync } from "node:fs";
+//
+// It also refuses to run on a Node older than the repo root's engines.node:
+// Yarn 4 doesn't enforce `engines`, and a shell defaulting to Node 20 crashed
+// the dev server in hello-world/ui with an unrelated-looking error. This is
+// the first thing `dev` and `build` run, so it fails early and clearly.
+import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+const range = JSON.parse(readFileSync(path.resolve(here, "../../../../package.json"), "utf8")).engines?.node;
+const min = Number(/^>=\s*(\d+)/.exec(range ?? "")?.[1]);
+if (min && Number(process.versions.node.split(".")[0]) < min) {
+  console.error(
+    `[copy:zk] Node ${process.versions.node} is too old: this repo needs Node ${range} (see .nvmrc). Try \`nvm use\`.`,
+  );
+  process.exit(1);
+}
 const src = path.resolve(here, "../../contract/managed/hello-world");
 const dest = path.resolve(here, "../public/managed/hello-world");
 

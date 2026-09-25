@@ -13,7 +13,8 @@
   },
   "scripts": {
     "wallets:new": "vite-node scripts/new-preprod-wallets.ts",
-    "preseed:cut": "vite-node scripts/cut-preseed.ts"
+    "preseed:cut": "vite-node scripts/cut-preseed.ts",
+    "fund:wallet": "vite-node scripts/fund-wallet.ts"
   },
   "dependencies": {
     "@midnight-ntwrk/midnight-js-network-id": "4.1.1",

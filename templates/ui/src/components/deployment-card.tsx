@@ -124,16 +124,23 @@ export function DeploymentCard<T, I = void>({
  * Shown while the wallet has 0 DUST. On the local devnet, point
  * `yarn fund:wallet` at this wallet's DUST address: a sponsor wallet registers
  * NIGHT with this address as the DUST receiver, so no wallet UI step is needed.
- * The script lives in examples/hello-world and works for any example's UI.
+ * The unshielded address is passed too, so the wallet also gets NIGHT to spend
+ * (a contract may charge it, e.g. private-party's checkIn). The script is a
+ * root script (packages/fast-sync/scripts/fund-wallet.ts) and works for any UI.
  */
 function NoDustWarning({ cap, networkId }: { cap: bigint; networkId: string | null }) {
   const { connectedApi } = useWallet();
   const [dustAddress, setDustAddress] = useState<string | null>(null);
+  const [nightAddress, setNightAddress] = useState<string | null>(null);
   useEffect(() => {
     connectedApi
       ?.getDustAddress()
       .then((a) => setDustAddress(a.dustAddress))
       .catch(() => setDustAddress(null));
+    connectedApi
+      ?.getUnshieldedAddress()
+      .then((a) => setNightAddress(a.unshieldedAddress))
+      .catch(() => setNightAddress(null));
   }, [connectedApi]);
 
   return (
@@ -145,11 +152,12 @@ function NoDustWarning({ cap, networkId }: { cap: bigint; networkId: string | nu
       {cap === 0n && networkId === "undeployed" && dustAddress && (
         <>
           <p className="text-muted-foreground">
-            On the local devnet, run this in <code>examples/hello-world</code> to have DUST generated
-            for this wallet:
+            On the local devnet, run this anywhere in the repo to have DUST generated for this
+            wallet{nightAddress && " and 1,000 NIGHT sent to it"}:
           </p>
           <code className="break-all rounded bg-muted px-2 py-1 text-xs">
             yarn fund:wallet {dustAddress}
+            {nightAddress && ` ${nightAddress}`}
           </code>
         </>
       )}

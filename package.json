@@ -17,6 +17,7 @@
     "new:ui": "node scripts/new-ui.mjs",
     "wallets:new": "yarn workspace @midnight-ntwrk/example-fast-sync run wallets:new",
     "preseed:cut": "yarn workspace @midnight-ntwrk/example-fast-sync run preseed:cut",
+    "fund:wallet": "yarn workspace @midnight-ntwrk/example-fast-sync run fund:wallet",
     "compile": "yarn workspaces foreach --all --parallel run compile",
     "test": "yarn workspaces foreach --all --verbose run test",
     "test:local": "yarn workspaces foreach --all --verbose run test:local",

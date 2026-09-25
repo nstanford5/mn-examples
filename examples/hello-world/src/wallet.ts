@@ -3,7 +3,6 @@ import {
   type DustSecretKey,
   type EncPublicKey,
   type FinalizedTransaction,
-  nativeToken,
   type ZswapSecretKeys,
 } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import type {
@@ -13,10 +12,8 @@ import type {
 } from '@midnight-ntwrk/midnight-js-types';
 import { ttlOneHour } from '@midnight-ntwrk/midnight-js-utils';
 import type {
-  DustAddress,
   WalletFacade,
   FacadeState,
-  UnshieldedAddress,
   UnshieldedKeystore,
 } from '@midnight-ntwrk/wallet-sdk';
 import type { EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
@@ -66,52 +63,6 @@ export class MidnightWalletProvider implements MidnightProvider, WalletProvider 
 
   submitTx(tx: FinalizedTransaction): Promise<string> {
     return this.wallet.submitTransaction(tx);
-  }
-
-  /**
-   * Sends unshielded NIGHT (amount in STAR) to another wallet; this wallet pays
-   * the fee. Used by scripts/fund-wallet.ts to fund a browser wallet on the
-   * local devnet, which has no faucet. The recipient only earns DUST from this
-   * NIGHT once its own key is registered for DUST generation.
-   */
-  async transferNight(
-    to: UnshieldedAddress,
-    amount: bigint,
-    ttl: Date = ttlOneHour(),
-  ): Promise<string> {
-    const recipe = await this.wallet.transferTransaction(
-      [{ type: 'unshielded', outputs: [{ type: nativeToken().raw, receiverAddress: to, amount }] }],
-      { shieldedSecretKeys: this.zswapSecretKeys, dustSecretKey: this.dustSecretKey },
-      { ttl },
-    );
-    const signed = await this.wallet.signRecipe(recipe, (payload) =>
-      this.unshieldedKeystore.signData(payload),
-    );
-    return await this.wallet.submitTransaction(await this.wallet.finalizeRecipe(signed));
-  }
-
-  /**
-   * Registers this wallet's not-yet-registered NIGHT UTXOs for DUST generation,
-   * sending the DUST they generate to `dustReceiver` instead of to this wallet.
-   * DUST can't be transferred, but NIGHT holders can point its generation at
-   * any DUST address. scripts/fund-wallet.ts uses this to give a browser wallet
-   * DUST without the browser wallet signing anything. Returns the tx id, or
-   * null if there was nothing to register.
-   */
-  async registerNightForDust(dustReceiver: DustAddress): Promise<string | null> {
-    const state = await this.wallet.waitForSyncedState();
-    const night = nativeToken().raw;
-    const unregistered = state.unshielded.availableCoins.filter(
-      (coin) => coin.utxo.type === night && coin.meta.registeredForDustGeneration === false,
-    );
-    if (unregistered.length === 0) return null;
-    const recipe = await this.wallet.registerNightUtxosForDustGeneration(
-      unregistered,
-      this.unshieldedKeystore.getPublicKey(),
-      (payload) => this.unshieldedKeystore.signData(payload),
-      dustReceiver,
-    );
-    return await this.wallet.submitTransaction(await this.wallet.finalizeRecipe(recipe));
   }
 
   async start(): Promise<void> {

@@ -22,6 +22,9 @@
 //                                                   scaffold examples/<name>/ui
 //   yarn new:ui <name> --check                      diff template-owned files (CI)
 //   yarn new:ui <name> --sync                       rewrite template-owned files
+//   yarn new:ui --check-all                         --check every generated UI, and the lockfile
+//   yarn new:ui --sync-all                          --sync every generated UI, then yarn install
+//                                                   if a package.json changed
 //
 // The create-time choices (--contract, --private-state) are recorded in
 // ui/new-ui.json, so --check and --sync re-render exactly what was created.
@@ -29,7 +32,8 @@
 // Everything is derived from the compiled contract, never from memory:
 //   contract/managed/<c>/compiler/contract-info.json  circuits, witnesses, ledger
 //   contract/managed/<c>/contract/index.d.ts          constructor arity only
-//   contract/witnesses.ts                             private-state factory
+//   contract/witnesses.ts                             private-state factory (read even
+//                                                     without witnesses)
 //
 // Files come in two kinds (see SEED_FILES):
 //   template-owned  identical for every example up to name substitution. Change
@@ -39,6 +43,7 @@
 //                   wrappers, a ledger readout, an in-memory circuit test), then
 //                   owned by the example author. --check and --sync skip them.
 
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,19 +108,75 @@ function usage() {
     [
       'Usage: yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]',
       '       yarn new:ui <name> --check | --sync',
+      '       yarn new:ui --check-all | --sync-all',
       '',
       '  <name>           existing example under examples/ (compile it first)',
       '  --contract       which contract/managed/<dir> to use when there are several',
       '  --private-state  where the browser keeps private state:',
       '                     memory      in memory, lost on reload',
       '                     persistent  encrypted IndexedDB, unlocked by a passphrase',
-      '                   default: persistent when the private-state factory takes',
-      '                   arguments (per-user secrets), else memory',
+      '                   default: persistent when the create<X>PrivateState factory',
+      '                   in contract/witnesses.ts takes arguments (per-user secrets),',
+      '                   with or without witnesses; else memory',
       '  --check       compare template-owned files in examples/<name>/ui with the',
       '                template; exit 1 on any difference (seed files are ignored)',
       '  --sync        rewrite template-owned files in examples/<name>/ui (seeds untouched)',
+      '  --check-all   --check every generated UI (examples/*/ui/new-ui.json), then',
+      '                `yarn install --immutable` to catch a stale yarn.lock',
+      '  --sync-all    --sync every generated UI; runs `yarn install` when a UI\'s',
+      '                package.json changed (commit the yarn.lock it writes)',
     ].join('\n'),
   );
+}
+
+/**
+ * Every generated UI, i.e. every examples/<name>/ui with a new-ui.json. A
+ * hand-built UI (zk-loan) has none, so it's never touched.
+ */
+function generatedUis() {
+  return fs
+    .readdirSync(EXAMPLES_DIR)
+    .filter((n) => fs.existsSync(path.join(EXAMPLES_DIR, n, 'ui', 'new-ui.json')))
+    .sort();
+}
+
+/**
+ * --check-all / --sync-all: run this script once per generated UI, as a child
+ * process, so the single-UI flow below stays as it is. Returns the exit code.
+ *
+ * A template change is only done once *every* UI is synced, including one
+ * created earlier in the same change, and yarn.lock matches the synced
+ * package.json files. Both were easy to miss by hand.
+ */
+function runAll(each) {
+  const names = generatedUis();
+  if (names.length === 0) fail('no generated UIs found (examples/*/ui/new-ui.json)');
+  const script = fileURLToPath(import.meta.url);
+  const pkgJson = (n) => fs.readFileSync(path.join(EXAMPLES_DIR, n, 'ui', 'package.json'), 'utf8');
+  const before = Object.fromEntries(names.map((n) => [n, pkgJson(n)]));
+  const failed = names.filter(
+    (n) => spawnSync(process.execPath, [script, n, `--${each}`], { stdio: 'inherit' }).status !== 0,
+  );
+  const yarn = (args) => spawnSync('yarn', args, { cwd: REPO_ROOT, stdio: 'inherit', shell: true }).status === 0;
+  if (each === 'check') {
+    console.log('\n  yarn install --immutable (does yarn.lock match every package.json?)');
+    const lockOk = yarn(['install', '--immutable', '--mode=skip-build']);
+    if (!lockOk) console.error('✖ yarn.lock is stale: run `yarn install` and commit it.');
+    if (failed.length) console.error(`✖ drifted: ${failed.join(', ')}`);
+    return failed.length || !lockOk ? 1 : 0;
+  }
+  if (failed.length) {
+    console.error(`✖ --sync failed for: ${failed.join(', ')}`);
+    return 1;
+  }
+  const changed = names.filter((n) => pkgJson(n) !== before[n]);
+  if (changed.length) {
+    console.log(`\n  package.json changed in ${changed.join(', ')}: running yarn install`);
+    if (!yarn(['install'])) return 1;
+    console.log('  Commit the updated yarn.lock; CI installs with --immutable.');
+  }
+  console.log(`\n✔ Synced ${names.length} generated UI(s): ${names.join(', ')}. Review with \`git diff\`.`);
+  return 0;
 }
 
 // --- arg parsing ------------------------------------------------------------
@@ -134,15 +195,21 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith('--contract=')) contractFlag = a.slice('--contract='.length);
   else if (a === '--private-state') privateStateFlag = argv[++i] ?? fail('--private-state needs a value');
   else if (a.startsWith('--private-state=')) privateStateFlag = a.slice('--private-state='.length);
-  else if (a === '--check' || a === '--sync') flags.add(a);
+  else if (['--check', '--sync', '--check-all', '--sync-all'].includes(a)) flags.add(a);
   else if (a.startsWith('-')) fail(`unknown flag ${a}`);
   else positionals.push(a);
+}
+if (flags.size > 1) fail('--check, --sync, --check-all and --sync-all are mutually exclusive');
+if (flags.has('--check-all') || flags.has('--sync-all')) {
+  if (positionals.length || contractFlag !== null || privateStateFlag !== null) {
+    fail('--check-all / --sync-all take no <name>, --contract or --private-state (each UI keeps its new-ui.json)');
+  }
+  process.exit(runAll(flags.has('--check-all') ? 'check' : 'sync'));
 }
 if (positionals.length !== 1) {
   usage();
   fail('exactly one <name> argument is required');
 }
-if (flags.size > 1) fail('--check and --sync are mutually exclusive');
 const mode = flags.has('--check') ? 'check' : flags.has('--sync') ? 'sync' : 'create';
 const name = positionals[0];
 if (!NAME_RE.test(name)) fail(`invalid name '${name}' (kebab-case, e.g. hello-world)`);
@@ -239,21 +306,49 @@ function argTypeLiteral(t) {
       return `{ kind: "enum", values: [${t.elements.map((e) => JSON.stringify(e)).join(', ')}] }`;
     case 'Alias':
       return argTypeLiteral(t.type);
+    case 'Struct':
+      // The stdlib UserAddress, { bytes: Uint8Array } in TypeScript. The form
+      // fills it from the wallet (lib/addresses.ts). Other structs: no form.
+      return t.name === 'UserAddress' &&
+        t.elements?.length === 1 &&
+        t.elements[0].name === 'bytes' &&
+        t.elements[0].type['type-name'] === 'Bytes' &&
+        t.elements[0].type.length === 32
+        ? '{ kind: "userAddress" }'
+        : null;
     default:
       return null;
   }
 }
+
+/**
+ * A Bytes argument named like a secret (private-party's `_secret`, an `sk`) or
+ * a one-time value (a mint `nonce`, a `salt`). A generic form would ask the
+ * user to paste or invent it; the UI should generate it, and keep a secret in
+ * private state as the Node test does. Such circuits get a TODO, not a form.
+ */
+const SECRET_NAME_RE = /secret|^_?sk$|priv|seed|nonce|salt/i;
+const isSecretArg = (a) => SECRET_NAME_RE.test(a.name) && a.type['type-name'] === 'Bytes';
 const typeLabel = (t) => [t['type-name'], t.name, t.tsType].filter(Boolean).join(' ');
 
 const circuits = info.circuits
   .filter((c) => c.proof)
   .map((c) => {
+    const secrets = c.arguments.filter(isSecretArg);
     const unsupported = c.arguments.filter((a) => argTypeLiteral(a.type) === null);
+    const reasons = [
+      ...secrets.map(
+        (a) =>
+          `${a.name} looks like a secret or one-time value: generate it in code, and keep a secret in private state`,
+      ),
+      ...unsupported.map((a) => `${a.name} is a ${typeLabel(a.type)}`),
+    ];
     return {
       name: c.name,
       args: c.arguments.map((a) => a.name),
-      specs: unsupported.length ? null : c.arguments.map((a) => ({ name: a.name, type: argTypeLiteral(a.type) })),
-      todo: unsupported.map((a) => `${a.name} is a ${typeLabel(a.type)}`).join(', '),
+      secretArgs: secrets.map((a) => a.name),
+      specs: reasons.length ? null : c.arguments.map((a) => ({ name: a.name, type: argTypeLiteral(a.type) })),
+      todo: reasons.join('; '),
     };
   });
 const formCircuits = circuits.filter((c) => c.specs);
@@ -263,6 +358,17 @@ const ledgerFields = info.ledger
   .filter((l) => l.exported)
   .map((l) => ({ name: l.name, storage: l.storage ?? 'Cell', enumValues: enumValuesOf(l.type) }));
 const hasWitnesses = info.witnesses.length > 0;
+
+// contract-info.json doesn't list stdlib calls, so read the source: the
+// .compact whose basename is the managed dir, else every contract/*.compact.
+const contractDir = path.join(exampleDir, 'contract');
+const compactSources = fs.readdirSync(contractDir).filter((f) => f.endsWith('.compact'));
+const ownSource = compactSources.find((f) => f === `${managed}.compact`);
+const compactSrc = (ownSource ? [ownSource] : compactSources)
+  .map((f) => fs.readFileSync(path.join(contractDir, f), 'utf8'))
+  .join('\n');
+/** An unshieldedBalance* check fails in memory unless the test sets a balance. */
+const usesUnshielded = /\b(receiveUnshielded|sendUnshielded|unshieldedBalance\w*)\s*\(/.test(compactSrc);
 
 // contract-info.json does not describe the constructor. The generated
 // declaration does: a constructor without parameters is exactly this line.
@@ -280,33 +386,37 @@ const ctorParams = hasCtorArgs
       .trim()
   : '';
 
-// With witnesses, the browser imports contract/witnesses.ts as is: it must
-// be Node-free and export a create<X>PrivateState factory (the phase-1
-// template convention).
+// The browser imports contract/witnesses.ts as is: it must be Node-free and
+// export a create<X>PrivateState factory (the phase-1 template convention).
+// It is read even when the contract declares no witnesses: a contract can
+// take its secrets as circuit arguments instead (private-party passes
+// `_secret` to every circuit), and the UI still has to keep them somewhere.
 let factory = null;
 let factoryTakesArgs = false;
 let factoryParams = '';
 let witnessesExport = null;
-if (hasWitnesses) {
-  const witnessesPath = path.join(exampleDir, 'contract', 'witnesses.ts');
-  if (!fs.existsSync(witnessesPath)) {
-    fail(`the contract declares witnesses but examples/${name}/contract/witnesses.ts is missing.`);
-  }
-  const src = fs.readFileSync(witnessesPath, 'utf8');
-  if (/from\s+['"]node:/.test(src)) {
+const witnessesPath = path.join(exampleDir, 'contract', 'witnesses.ts');
+if (hasWitnesses && !fs.existsSync(witnessesPath)) {
+  fail(`the contract declares witnesses but examples/${name}/contract/witnesses.ts is missing.`);
+}
+const witnessesSrc = fs.existsSync(witnessesPath) ? fs.readFileSync(witnessesPath, 'utf8') : null;
+const factoryMatch = witnessesSrc?.match(/export const (create\w*PrivateState)\s*=\s*\(([^)]*)\)/);
+if (hasWitnesses && !factoryMatch) {
+  fail(`examples/${name}/contract/witnesses.ts has no \`export const create<X>PrivateState = (...) =>\` factory.`);
+}
+if (factoryMatch) {
+  if (/from\s+['"]node:/.test(witnessesSrc)) {
     fail(`examples/${name}/contract/witnesses.ts imports node:* modules; the browser can't load it. Move those out first.`);
   }
-  const m = src.match(/export const (create\w*PrivateState)\s*=\s*\(([^)]*)\)/);
-  if (!m) {
-    fail(`examples/${name}/contract/witnesses.ts has no \`export const create<X>PrivateState = (...) =>\` factory.`);
-  }
-  factory = m[1];
-  factoryParams = m[2].replace(/\s+/g, ' ').replace(/,\s*$/, '').trim();
+  factory = factoryMatch[1];
+  factoryParams = factoryMatch[2].replace(/\s+/g, ' ').replace(/,\s*$/, '').trim();
   factoryTakesArgs = factoryParams !== '';
+}
+if (hasWitnesses) {
   // `witnesses`, or `<contract>Witnesses` when one file serves several
   // contracts (shielded-chips: rouletteWitnesses, chipsWitnesses).
   const perContract = `${managed.replace(/[-_](\w)/g, (_, c) => c.toUpperCase())}Witnesses`;
-  witnessesExport = [`witnesses`, perContract].find((n) => new RegExp(`export const ${n}\\b`).test(src));
+  witnessesExport = [`witnesses`, perContract].find((n) => new RegExp(`export const ${n}\\b`).test(witnessesSrc));
   if (!witnessesExport) {
     fail(`examples/${name}/contract/witnesses.ts exports neither \`witnesses\` nor \`${perContract}\`.`);
   }
@@ -317,7 +427,7 @@ const witnessesSpecifier = witnessesExport === 'witnesses' ? 'witnesses' : `${wi
 const psAuto = !factoryTakesArgs;
 // A factory with parameters builds per-user private state (secret keys,
 // hidden values): losing it on reload usually locks the user out.
-const privateState = privateStateFlag ?? (hasWitnesses && factoryTakesArgs ? 'persistent' : 'memory');
+const privateState = privateStateFlag ?? (factoryTakesArgs ? 'persistent' : 'memory');
 const configContent = `${JSON.stringify({ contract: managed, privateState }, null, 2)}\n`;
 
 const names = deriveNames(name);
@@ -365,6 +475,7 @@ function testBody() {
           `import { ${witnessesSpecifier} } from "../../../contract/witnesses.js";`,
         ]
       : []),
+    ...(usesUnshielded ? ['// import { withUnshieldedBalance } from "./contract-balance";'] : []),
     '',
     ...(constructs ? ['const COIN_PK = "00".repeat(32);', ''] : []),
     'describe("__name__ contract (in memory)", () => {',
@@ -391,6 +502,15 @@ function testBody() {
           '  // TODO: one test per circuit, asserting on the ledger the UI will show:',
           '  //   const ctx = createCircuitContext(dummyContractAddress(), COIN_PK,',
           '  //     currentContractState, createInitialPrivateState());',
+          ...(usesUnshielded
+            ? [
+                '  // The contract moves unshielded tokens, and an in-memory context starts',
+                "  // with an empty contract balance (receiveUnshielded doesn't credit the",
+                '  // next call). Give it what the chain would hold, or unshieldedBalance*',
+                '  // asserts always fail:',
+                '  //   withUnshieldedBalance(ctx, amount);',
+              ]
+            : []),
           '  //   const { context } = contract.impureCircuits.<circuit>(ctx, ...args);',
           '  //   expect(ledger(context.currentQueryContext.state)).toEqual(...);',
           ...circuits.map((c) => `  it.todo(${JSON.stringify(`${c.name}(${c.args.join(', ')})`)});`),
@@ -430,10 +550,16 @@ const blocks = {
   __WITNESS_METHOD_DOC__: hasWitnesses
     ? 'withWitnesses: the TypeScript witnesses from contract/witnesses.ts.'
     : 'withVacantWitnesses: the contract declares no witnesses.',
-  __PRIVATE_STATE_BLOCK__: hasWitnesses
+  __PRIVATE_STATE_BLOCK__: factory
     ? [
         '/**',
         ' * Private state is whatever examples/__name__/contract/witnesses.ts builds.',
+        ...(hasWitnesses
+          ? []
+          : [
+              ' * The contract declares no witnesses: the UI reads this state itself and',
+              ' * passes what the circuits need as arguments, as the Node test does.',
+            ]),
         ' * PRIVATE_STATE_STORAGE below says where it is kept (./private-state.ts).',
         ' */',
         `export type __Name__PrivateState = ReturnType<typeof ${factory}>;`,
@@ -566,10 +692,11 @@ const blocks = {
 function render(raw, rel) {
   let out = raw;
   // Import line for witnesses: drop the whole line when there are none.
-  out = hasWitnesses
+  const witnessImports = [factory, hasWitnesses && witnessesSpecifier].filter(Boolean);
+  out = witnessImports.length
     ? out.replaceAll(
         '__WITNESS_IMPORT__',
-        `import { ${factory}, ${witnessesSpecifier} } from "../../../contract/witnesses.js";`,
+        `import { ${witnessImports.join(', ')} } from "../../../contract/witnesses.js";`,
       )
     : out.replaceAll('__WITNESS_IMPORT__\n', '');
   // Blocks first (they contain name tokens), then names.
@@ -675,7 +802,8 @@ const rel = (p) => p.split(path.sep).join('/');
 console.log(`\n✔ Scaffolded examples/${name}/ui from contract/managed/${managed}`);
 console.log(
   `  circuits: ${circuits.map((c) => c.name).join(', ') || '(none)'}` +
-    `\n  witnesses: ${hasWitnesses ? `yes (private state from ${factory}${factoryTakesArgs ? ', needs args' : ''})` : 'none'}` +
+    `\n  witnesses: ${hasWitnesses ? 'yes' : 'none'}` +
+    `\n  private state: ${factory ? `${factory}(${factoryParams})${factoryTakesArgs ? ', needs args' : ''}` : 'none'}` +
     `\n  constructor args: ${hasCtorArgs ? `yes (${ctorParams})` : 'none'}` +
     `\n  private state storage: ${privateState}${privateStateFlag === null ? ' (default)' : ''}`,
 );
@@ -685,6 +813,21 @@ for (const f of files.filter((f) => SEED_FILES.has(f.templateRel))) {
 }
 if (needs) {
   console.log(`\n  ⚠ Deploy needs ${needs}: the panel has a TODO that rejects until you supply them.`);
+}
+/** Secret-like argument name → the circuits that take it. */
+const secretUses = new Map();
+for (const c of circuits) for (const a of c.secretArgs) secretUses.set(a, [...(secretUses.get(a) ?? []), c.name]);
+for (const [arg, uses] of secretUses) {
+  console.log(
+    `  ⚠ ${arg} looks like a secret or one-time value, so ${uses.join(', ')} get${uses.length === 1 ? 's' : ''} ` +
+      'no form field. Generate it in code, and keep a secret in private state.',
+  );
+}
+if (usesUnshielded) {
+  console.log(
+    '  ⚠ The contract moves unshielded tokens. In-memory tests start with an empty contract ' +
+      'balance: see withUnshieldedBalance in the circuits test.',
+  );
 }
 console.log('\n  Next steps:');
 console.log('    1. yarn install   (the new workspace changes yarn.lock; commit it — CI uses --immutable)');

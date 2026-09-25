@@ -17,9 +17,9 @@ wallet sync (`src/fast-sync/`, `preseed/`).
 - `src/` — TypeScript harness: `wallet.ts`, `providers.ts`, `config.ts`,
   `fast-sync/`, and `test/hw.test.ts`.
 - `scripts/wait-for-dust.ts` — waits for DUST to accrue before tests.
-- `scripts/fund-wallet.ts` — `yarn fund:wallet <mn_dust_…> [mn_addr_…]`: gives a
-  browser wallet DUST on the local devnet (no local faucet). A sponsor wallet funded
-  by genesis registers NIGHT with the browser wallet's DUST address as receiver.
+- Funding the browser wallet on the local devnet is the repo-wide
+  `yarn fund:wallet <mn_dust_…> [mn_addr_…]` (`packages/fast-sync/scripts/fund-wallet.ts`),
+  shared by every generated UI. It used to live here.
 - `ui/` — browser frontend (its own workspace, `@midnight-ntwrk/example-hello-world-ui`).
   Midnight wiring lives in `ui/src/midnight/` (`contract.ts`, `providers.ts`,
   `hello-world-api.ts`); see `ui/README.md`. Most of `ui/` is rendered from

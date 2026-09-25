@@ -36,14 +36,15 @@ forfeits it, and there is no recovery.
 
 Not yet run. Everything below needs a human to approve wallet prompts. What
 *has* been verified (unit tests, build, in-browser circuits, IndexedDB
-round-trip) is listed in `AGENTS.md` under "What was actually verified".
-When you run these, tick them off, move them into that list, and delete this
-section once all pass.
+round-trip) is in the table in `AGENTS.md` under "What was actually verified".
+When you run these, tick them off. Once all pass, mark the Lace columns ✅ in
+that table (in `templates/ui/AGENTS.md`, then `yarn new:ui --sync-all`) and
+delete this section.
 
 Setup: `yarn env:up && yarn wait:dust` here, `yarn workspace
 @midnight-ntwrk/example-battleship-ui dev`, and two Chrome profiles (A and B),
 each with its own Lace wallet on `undeployed`. Fund both with
-`yarn fund:wallet <mn_dust_…>` from `examples/hello-world`.
+`yarn fund:wallet <mn_dust_…> [mn_addr_…]` (a root script).
 
 - [ ] **Unlock:** A connects and sets a passphrase; the panel appears. A
       weak passphrase is refused with the policy reason.
@@ -82,7 +83,7 @@ yarn workspace @midnight-ntwrk/example-battleship-ui dev           # http://loca
 ```
 
 On the local devnet, give **each** browser wallet DUST with
-`yarn fund:wallet <mn_dust_…>` from `examples/hello-world`. The UI shows the
+`yarn fund:wallet <mn_dust_…> [mn_addr_…]`, from anywhere in the repo. The UI shows the
 exact command when the connected wallet has none.
 
 ## Scripts
