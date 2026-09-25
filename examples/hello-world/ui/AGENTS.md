@@ -20,6 +20,10 @@ Don't claim more than this when you reuse the pattern:
   update; wallet-delegated proving; preprod; contracts with witnesses or
   private state (hello-world has none). Treat those paths as unverified until
   you've run them.
+- **Since the Lace deploy check:** the deploy/join/forget logic moved out of the
+  panel into the template-owned `hooks/use-deployment.ts` and
+  `components/deployment-card.tsx`. That change was only checked with
+  typecheck, unit tests and build. Re-run the Lace deploy before calling it verified.
 - Do **not** use `examples/zk-loan/ui` as a reference. It isn't authoritative.
   Use this directory and the plugin docs, and check both against the installed
   types in `node_modules`.
@@ -45,40 +49,111 @@ provider swap and the bundler, not in contract calls.
 
 ## Recipe: add `examples/<name>/ui`
 
+UIs are scaffolded by a script, not by hand. It is **phase 2**, after
+`yarn new:example` (phase 1). Run it only once the example's contract compiles
+and `yarn test:local` is green, because it reads the compiled output.
+
+```bash
+yarn new:ui <name> [--contract <managed-dir>]
+yarn install          # the new workspace changes yarn.lock; commit it
+yarn workspace @midnight-ntwrk/example-<name>-ui typecheck
+yarn workspace @midnight-ntwrk/example-<name>-ui test:unit
+yarn workspace @midnight-ntwrk/example-<name>-ui build
+```
+
 The root `workspaces` glob already includes `examples/*/ui`, so no root
 `package.json` change is needed.
 
-### 1. Scaffold
+### 1. What the generator derives, and from where
 
-Copy this directory as a starting point (drop `node_modules/`, `dist/`,
-`public/`), or run `/midnight-dapp-dev:init` from `examples/<name>` and then
-apply every fix listed below. The plugin template is thinner and has known
-gaps. If you use the plugin, fold its `api/` package into `ui/src/midnight/`
-and delete `api/`, because `examples/*/api` is not a workspace.
+It never works from memory. Its only inputs are the compiled contract and the
+witnesses file:
 
-Rename the package to `@midnight-ntwrk/example-<name>-ui`.
+| Input | Used for |
+|---|---|
+| `contract/managed/<c>/compiler/contract-info.json` | provable circuits (union type, one `callTx` wrapper each), exported ledger fields, whether witnesses exist |
+| `contract/managed/<c>/contract/index.d.ts` | only whether the constructor takes arguments |
+| `contract/witnesses.ts` | the `create<X>PrivateState` factory (it aborts if the file imports `node:*`) |
 
-### 2. Keep `package.json` on the repo pins
+It refuses to run when:
+- the example doesn't exist
+- nothing is compiled
+- `ui/` already exists
+- more than one contract is compiled and `--contract` isn't given (e.g.
+  `shielded-chips`). Multi-contract UIs aren't scaffolded; see §5.
 
-- **Exact versions:** `midnight-js-*` `4.1.1` (contracts, types, network-id,
-  indexer-public-data-provider, fetch-zk-config-provider,
-  http-client-proof-provider, dapp-connector-proof-provider, utils, protocol)
-  and `@midnight-ntwrk/dapp-connector-api` `4.0.1`.
-- **No separate runtime packages:** don't add `ledger-v8`, `compact-runtime`
-  or `compact-js` directly. Import them from
-  `@midnight-ntwrk/midnight-js-protocol/{ledger,compact-runtime,compact-js}`,
-  as the harnesses do. Root `resolutions` pin the underlying versions.
-- **`"vite": "6.4.3"`,** not the plugin's `^7`. It must match the Vite hoisted
-  to the root (see root `AGENTS.md`). Match already-hoisted ranges for the
-  plugins too: `vite-plugin-node-polyfills ^0.24.0`,
-  `vite-plugin-top-level-await ^1.6.0`, `vite-plugin-wasm ^3.6.0`,
-  `@vitejs/plugin-react ^5.2.0`, and `vitest ^4.1.0`.
+### 2. Template-owned files: don't edit them in an example
+
+Everything except the seed files below comes from `templates/ui/`, rendered by
+name substitution. This covers configs, providers, wallet context, hooks,
+`lib/`, generic components (including `deployment-card.tsx` and
+`hooks/use-deployment.ts`), `midnight/contract.ts`, `midnight/providers.ts` and
+the generic tests.
+
+- CI runs `yarn new:ui <name> --check` for every generated UI. It fails when an
+  example's copy differs from the template.
+- To change generic UI behaviour, edit `templates/ui/`. Then run
+  `yarn new:ui <name> --sync` in each generated UI (hello-world today) and
+  review the `git diff`.
+- If a change is truly example-specific, it belongs in a seed file, not in a
+  template-owned one.
+
+`midnight/contract.ts` is generated per contract:
+- circuit union
+- `PRIVATE_STATE_ID`
+- private-state type and `createInitialPrivateState`
+- `withVacantWitnesses` or `withWitnesses(witnesses)`
+
+It is still template-owned, because every value in it comes from the compiled
+contract. `providers.ts` keeps the parts that cost debugging time:
+- the explicit `window.WebSocket`
+- `parse{Coin,Enc}PublicKeyToHex`
+- the hex round-trip through `Transaction.deserialize("signature","proof","binding", …)`
+- `tx.identifiers()[0]` for the tx id
+
+### 3. Seed files: yours to edit
+
+These are generated once as a working starting point. `--check` and `--sync`
+ignore them.
+
+- **`src/midnight/<name>-api.ts`:**
+  - `deploy<Name>` / `join<Name>`
+  - one typed wrapper per provable circuit
+    (`(contract, ...args: Parameters<Contract["callTx"]["<c>"]>)`)
+  - `ledger$`, the whole decoded `Ledger` as an observable
+
+  Add projections (hello-world adds `message$`) and match each step of
+  `src/test/*.test.ts`.
+- **`src/components/<name>-panel.tsx`:** `<DeploymentCard>` (step 1), a
+  best-effort ledger readout, and a TODO list of circuits. Replace the last two
+  with one form per circuit, and run each call in `deployment.run("<label>", …)`
+  so busy and error state are shared.
+- **`src/__tests__/<name>-circuits.test.ts`:** constructs the real contract in
+  memory and decodes its ledger. Extend it with one `impureCircuits.<c>` call
+  per circuit (see `message.test.ts` here).
+- **`README.md`**
+
+When deploying needs constructor args, or the private-state factory takes
+arguments, the generator cannot invent values:
+- `deploy<Name>` / `join<Name>` take them as parameters.
+- The panel's deploy and join reject with a `TODO` error until you supply them.
+- The circuits test is `it.todo`.
+
+Take the values from the example's Node test.
+
+### 4. Pins (already set by the template; keep them)
+
+- **Exact versions:** `midnight-js-*` `4.1.1` and
+  `@midnight-ntwrk/dapp-connector-api` `4.0.1`.
+- **No separate runtime packages:** no direct `ledger-v8`, `compact-runtime` or
+  `compact-js`. Import them via
+  `@midnight-ntwrk/midnight-js-protocol/{ledger,compact-runtime,compact-js}`.
+- **Vite:** `"vite": "6.4.3"`, matching the hoisted root Vite (see root
+  `AGENTS.md`).
 - **Scripts:** only `copy:zk`, `dev`, `build`, `preview`, `typecheck` and
   `test:unit`. **Never** add `compile`, `test`, `test:local`, `env:up` or
-  `wait:dust` to a UI: root `yarn compile` / `yarn test*` run on every
-  workspace and would pull the UI into CI's local-network runs.
-- **Chain `copy:zk` explicitly** (`"dev": "yarn copy:zk && vite"`). Yarn 4
-  does not run `pre*` scripts.
+  `wait:dust`: root aggregates would pull the UI into CI's local-network runs.
+  `copy:zk` is chained explicitly because Yarn 4 doesn't run `pre*` scripts.
 
 After `yarn install`, check the hoisting didn't move:
 
@@ -87,73 +162,16 @@ node -p "require('./node_modules/vite/package.json').version"   # 6.4.3
 node -p "require('./node_modules/bn.js/package.json').version"  # 5.2.5
 ```
 
-### 3. Files you copy unchanged
-
-These are contract-agnostic:
-
-- `vite.config.ts`, `vitest.config.ts`, `tsconfig*.json`, `index.html`
-  (retitle it), `src/main.tsx`, `src/index.css`
-- `src/lib/{errors,storage,utils}.ts`
-- `src/midnight/private-state.ts`
-- `src/providers/{wallet-context,midnight-providers}.tsx`
-- `src/hooks/{use-wallet,use-contract-state,use-dust-balance}.ts`
-- `src/components/{wallet-widget,network-badge,proving-settings}.tsx`,
-  `src/components/ui/*`
-- `scripts/copy-zk.mjs` (change the `hello-world` path segments)
-
-### 4. Files you write per contract
-
-**`src/midnight/contract.ts`**
-- Re-export `Contract` and `ledger` from
-  `../../../contract/managed/<name>/contract/index.js`.
-- Define a circuit-id union with **every provable circuit**. The compiled
-  `ProvableCircuits` type in `managed/<name>/contract/index.d.ts` lists them;
-  those are the files in `managed/<name>/keys/`.
-- Define `PRIVATE_STATE_ID`, the private-state type and `ZK_ASSETS_PATH`.
-- Build the `CompiledContract` exactly as `contract/index.ts` does, with two
-  changes:
-  - Replace the `node:path` asset path with `withCompiledFileAssets(ZK_ASSETS_PATH)`.
-    In the browser, keys come from `providers.zkConfigProvider`; this call only
-    satisfies the type.
-  - For witnesses, use `CompiledContract.withWitnesses(witnesses)` instead of
-    `withVacantWitnesses`, importing from `../../../contract/witnesses.js`. The
-    existing `contract/witnesses.ts` files only import types and
-    `midnight-js-protocol/compact-runtime`, so they're browser-safe. Keep it that
-    way: no `node:*` imports in witnesses.
-
-**`src/midnight/providers.ts`**
-- Copy it, then change only the type parameters (`<Name>Circuits`,
-  `<Name>PrivateState`) and the imported constants.
-- Keep these parts as they are:
-  - the explicit `window.WebSocket` argument
-  - `parse{Coin,Enc}PublicKeyToHex`
-  - the hex round-trip through `Transaction.deserialize("signature","proof","binding", …)`
-  - `tx.identifiers()[0]` for the tx id
-
-**`src/midnight/<name>-api.ts`**
-- Write one function per step of `src/test/*.test.ts`, calling the same
-  midnight-js function with the same options.
-- `deployContract` / `findDeployedContract` take
-  `{ compiledContract, privateStateId, initialPrivateState }`. Use the same
-  initial private state factory the test uses (e.g.
-  `createCalculatorPrivateState()`).
-- For calls, use `found.callTx.<circuit>(...args)`, or `submitCallTx` as the
-  tests do.
-- Expose the ledger as an observable:
-  `publicDataProvider.contractStateObservable(addr, { type: "latest" })` piped
-  through `ledger(state.data)`.
-
-**The panel component** (see `components/hello-world-panel.tsx`)
-- Deploy or join by address (remember the address per network in `storage`).
-- Re-join when `providers` change: contract handles are bound to one providers
-  bundle, and switching proving mode rebuilds it.
-- One form per circuit.
-- Render ledger fields from the observable.
-- Keep the `useDustBalance` warning.
+Don't scaffold with `/midnight-dapp-dev:init` or by copying this directory.
+The generator produces the same result deterministically and keeps it
+drift-checked.
 
 ### 5. Contracts with private state or witnesses
 
-Not yet exercised in a UI in this repo, so verify before relying on it.
+The generator wires witnesses and the private-state factory. When it was
+built, the generated `calculator` UI ran `divide` (which calls the `divMod`
+witness) in memory in the browser. Deploying and calling through Lace with
+witnesses has **not** been confirmed yet.
 
 - **Lost on reload:** `inMemoryPrivateStateProvider` keeps state only for the
   page's lifetime. If the contract's correctness depends on private state

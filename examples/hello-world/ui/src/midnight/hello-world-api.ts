@@ -11,6 +11,7 @@ import { map, type Observable } from "rxjs";
 import {
   CompiledHelloWorldContract,
   ledger,
+  createInitialPrivateState,
   PRIVATE_STATE_ID,
   type Contract,
 } from "./contract";
@@ -29,7 +30,7 @@ export async function deployHelloWorld(
   const deployed = await deployContract(providers, {
     compiledContract: CompiledHelloWorldContract,
     privateStateId: PRIVATE_STATE_ID,
-    initialPrivateState: {},
+    initialPrivateState: createInitialPrivateState(),
   });
   return {
     contract: deployed,
@@ -50,7 +51,7 @@ export async function joinHelloWorld(
     compiledContract: CompiledHelloWorldContract,
     contractAddress: address,
     privateStateId: PRIVATE_STATE_ID,
-    initialPrivateState: {},
+    initialPrivateState: createInitialPrivateState(),
   });
 }
 

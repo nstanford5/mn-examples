@@ -22,8 +22,11 @@ wallet sync (`src/fast-sync/`, `preseed/`).
   by genesis registers NIGHT with the browser wallet's DUST address as receiver.
 - `ui/` — browser frontend (its own workspace, `@midnight-ntwrk/example-hello-world-ui`).
   Midnight wiring lives in `ui/src/midnight/` (`contract.ts`, `providers.ts`,
-  `hello-world-api.ts`); see `ui/README.md`. `ui/AGENTS.md` is the recipe for
-  adding the same kind of frontend to another example.
+  `hello-world-api.ts`); see `ui/README.md`. Most of `ui/` is rendered from
+  `templates/ui/` and drift-checked (`yarn new:ui hello-world --check`). Only
+  `hello-world-api.ts`, `hello-world-panel.tsx`, `message.test.ts` and the
+  README are hand-written. `ui/AGENTS.md` explains `yarn new:ui`, which adds the
+  same frontend to another example.
 
 ## Run
 

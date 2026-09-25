@@ -1,6 +1,6 @@
 // Builds the MidnightProviders bundle for the browser.
 //
-// This mirrors examples/hello-world/src/providers.ts (the Node harness), with
+// This mirrors examples/__name__/src/providers.ts (the Node harness), with
 // each Node-only piece swapped for a browser one:
 //
 //   provider              Node harness                  Browser (here)
@@ -37,15 +37,15 @@ import {
 import {
   PRIVATE_STATE_ID,
   ZK_ASSETS_PATH,
-  type HelloWorldCircuits,
-  type HelloWorldPrivateState,
+  type __Name__Circuits,
+  type __Name__PrivateState,
 } from "./contract";
 import { inMemoryPrivateStateProvider } from "./private-state";
 
-export type HelloWorldProviders = MidnightProviders<
-  HelloWorldCircuits,
+export type __Name__Providers = MidnightProviders<
+  __Name__Circuits,
   typeof PRIVATE_STATE_ID,
-  HelloWorldPrivateState
+  __Name__PrivateState
 >;
 
 /**
@@ -53,7 +53,7 @@ export type HelloWorldProviders = MidnightProviders<
  *  - "wallet": the connected wallet proves (ConnectedAPI.getProvingProvider).
  *    There's nothing else to run, and witness data never leaves the wallet.
  *  - "local": a proof server you run yourself (`yarn proof:up` in
- *    examples/hello-world), same as the Node test harness.
+ *    examples/__name__), same as the Node test harness.
  * Avoid public/hosted proof servers: whoever runs them sees your proof inputs.
  */
 export type ProvingMode = "wallet" | "local";
@@ -69,7 +69,7 @@ export const DEFAULT_PROOF_SERVER_URL = "http://127.0.0.1:6300";
 export async function createProviders(
   api: ConnectedAPI,
   proving: ProvingOptions,
-): Promise<HelloWorldProviders> {
+): Promise<__Name__Providers> {
   // The wallet decides which network we're on. Everything below (indexer
   // endpoints, network id for address encoding) follows from its config, so
   // the same build works on local `undeployed`, preview, and preprod.
@@ -89,7 +89,7 @@ export async function createProviders(
 
   // Fetches keys/<circuit>.{prover,verifier} and zkir/<circuit>.bzkir for
   // each circuit from the page's own origin. scripts/copy-zk.mjs puts them there.
-  const zkConfigProvider = new FetchZkConfigProvider<HelloWorldCircuits>(
+  const zkConfigProvider = new FetchZkConfigProvider<__Name__Circuits>(
     new URL(ZK_ASSETS_PATH, window.location.origin).toString(),
     fetch.bind(window),
   );
@@ -144,7 +144,7 @@ export async function createProviders(
   return {
     privateStateProvider: inMemoryPrivateStateProvider<
       typeof PRIVATE_STATE_ID,
-      HelloWorldPrivateState
+      __Name__PrivateState
     >(),
     publicDataProvider,
     zkConfigProvider,
@@ -156,7 +156,7 @@ export async function createProviders(
 
 async function createProofProvider(
   api: ConnectedAPI,
-  zkConfigProvider: FetchZkConfigProvider<HelloWorldCircuits>,
+  zkConfigProvider: FetchZkConfigProvider<__Name__Circuits>,
   proving: ProvingOptions,
 ): Promise<ProofProvider> {
   if (proving.mode === "local") {
