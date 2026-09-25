@@ -1,24 +1,34 @@
 // Seed file: generated once by `yarn new:ui`, then yours to edit. The drift
-// check ignores it. Replace the ledger readout and the circuit TODO list with
-// the example's own UI; keep <DeploymentCard> as step 1.
+// check ignores it. Replace the ledger readout and the generic circuit forms
+// with the example's own UI; keep <DeploymentCard> as step 1.
 import { useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CircuitForm } from "@/components/circuit-form";
 import { DeploymentCard } from "@/components/deployment-card";
 import { useContractState } from "@/hooks/use-contract-state";
 import { useDeployment } from "@/hooks/use-deployment";
-import { __PANEL_API_IMPORTS__ } from "@/midnight/__name__-api";
+import type { ArgSpec } from "@/lib/circuit-args";
+import {__PANEL_API_IMPORTS__} from "@/midnight/__name__-api";
 
 /** Exported ledger fields, from contract-info.json. */
 const LEDGER_FIELDS = __LEDGER_FIELDS__ as const;
 
-/** Provable circuits and their argument names, from contract-info.json. */
-const CIRCUITS: { name: string; args: string[] }[] = __CIRCUIT_LIST__;
+/**
+ * Provable circuits and their argument types, from contract-info.json. `args`
+ * is null when an argument has no generic form (see lib/circuit-args.ts);
+ * `todo` names it.
+ */
+type CircuitSpec = { name: string; args: ArgSpec[] } | { name: string; args: null; todo: string };
+const CIRCUITS: CircuitSpec[] = __CIRCUIT_LIST__;
+
+/** Submits a circuit through its wrapper in @/midnight/__name__-api. */
+const CALLS: Record<string, (contract: __Name__Contract, args: unknown[]) => Promise<unknown>> = __CIRCUIT_CALLS__;
 
 export function __Name__Panel() {
   const deployment = useDeployment({
 __DEPLOYMENT_OPS__
   });
-  const { providers, address, error } = deployment;
+  const { providers, contract, address, busy, error, run } = deployment;
 
   const ledgerObservable = useMemo(
     () => (providers && address ? ledger$(providers, address) : null),
@@ -58,18 +68,33 @@ __DEPLOYMENT_OPS__
             <CardHeader>
               <CardTitle>3. Circuits</CardTitle>
               <CardDescription>
-                TODO: one form per circuit. Call the wrapper from @/midnight/__name__-api inside
-                {" "}<code>deployment.run(&quot;&lt;label&gt;&quot;, ...)</code> so busy/error state is shared.
+                One generic form per circuit. Each call runs the circuit locally, proves it, then
+                asks the wallet to balance and submit it.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <ul className="list-disc pl-5 font-mono text-sm">
-                {CIRCUITS.map((c) => (
-                  <li key={c.name}>
-                    {c.name}({c.args.join(", ")})
-                  </li>
-                ))}
-              </ul>
+            <CardContent className="flex flex-col gap-4">
+              {CIRCUITS.map((c) =>
+                c.args ? (
+                  <CircuitForm
+                    key={c.name}
+                    name={c.name}
+                    args={c.args}
+                    busy={busy === c.name}
+                    disabled={busy !== null || !contract}
+                    onSubmit={(values) =>
+                      void run(c.name, async () => {
+                        const call = CALLS[c.name];
+                        if (contract && call) await call(contract, values);
+                      })
+                    }
+                  />
+                ) : (
+                  <p key={c.name} className="text-sm text-muted-foreground">
+                    <code>{c.name}</code>: TODO, no generic form because {c.todo}. Build one here and
+                    call its wrapper from @/midnight/__name__-api.
+                  </p>
+                ),
+              )}
             </CardContent>
           </Card>
         </>

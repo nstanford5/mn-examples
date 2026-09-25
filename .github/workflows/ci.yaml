@@ -79,8 +79,9 @@ jobs:
           retention-days: 7
 
   # Every UI scaffolded by `yarn new:ui` (marked in its src/midnight/contract.ts):
-  # its template-owned files must match templates/ui, and it must typecheck
-  # and pass its unit tests. No local network needed. The wallet flow needs a
+  # its template-owned files must match templates/ui, and it must typecheck,
+  # pass its unit tests and build (Vite/Rollup bundling problems only show up
+  # there). No local network needed. The wallet flow needs a
   # human (Lace approvals), so there is no E2E step.
   ui:
     name: generated UIs
@@ -109,7 +110,7 @@ jobs:
       - name: Install dependencies (whole workspace)
         run: yarn install --immutable
 
-      - name: Check, typecheck, and unit-test each generated UI
+      - name: Check, typecheck, unit-test, and build each generated UI
         run: |
           set -euo pipefail
           found=0
@@ -122,6 +123,7 @@ jobs:
             yarn new:ui "$name" --check
             yarn workspace "@midnight-ntwrk/example-$name-ui" typecheck
             yarn workspace "@midnight-ntwrk/example-$name-ui" test:unit
+            yarn workspace "@midnight-ntwrk/example-$name-ui" build
             echo "::endgroup::"
           done
           [ "$found" = 1 ] || { echo "no generated UIs found"; exit 1; }

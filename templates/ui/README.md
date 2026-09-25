@@ -4,7 +4,7 @@ Browser frontend for `examples/__name__`: connect a Midnight wallet (Lace),
 deploy or join the contract, watch its public ledger, and call its circuits.
 
 Scaffolded by `yarn new:ui __name__` from `templates/ui/`. See
-`examples/hello-world/ui/AGENTS.md` for which files are template-owned and
+`AGENTS.md` next to this file for which files are template-owned and
 which are yours, and for the verification checklist.
 
 TODO: describe what this UI adds on top of the scaffold.
