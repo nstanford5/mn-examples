@@ -30,6 +30,21 @@ export function fail(msg) {
   process.exit(1);
 }
 
+/**
+ * Exit unless the running Node satisfies the root package.json `engines.node`
+ * (a `>=MAJOR…` range). Yarn 4 doesn't enforce `engines`, and a shell that
+ * defaults to an older Node produces UIs whose dev server then crashes.
+ */
+export function assertNodeVersion(repoRoot) {
+  const range = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).engines?.node;
+  const min = Number(/^>=\s*(\d+)/.exec(range ?? '')?.[1]);
+  if (!min) return;
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < min) {
+    fail(`Node ${process.versions.node} is too old: this repo needs Node ${range} (see .nvmrc). Try \`nvm use\`.`);
+  }
+}
+
 /** kebab-case `name` → { name, Name (PascalCase), Title (Space Joined) }. */
 export function deriveNames(name) {
   const words = name.split('-');

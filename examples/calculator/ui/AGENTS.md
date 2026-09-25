@@ -3,7 +3,7 @@
 Instructions for agents adding or changing a browser frontend for an example in
 this repo. Every generated UI runs its example's existing contract and
 test-suite calls in the browser behind a Midnight wallet. For how to run this
-one (`examples/hello-world/ui`), see `README.md` next to this file.
+one (`examples/calculator/ui`), see `README.md` next to this file.
 
 This file is template-owned. Its source is `templates/ui/AGENTS.md`, and
 every generated UI gets an identical copy. Edit the template, then run

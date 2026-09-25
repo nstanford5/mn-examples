@@ -40,6 +40,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   NAME_RE,
+  assertNodeVersion,
   assertNoLeftoverTokens,
   deriveNames,
   fail,
@@ -52,6 +53,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const TEMPLATE_DIR = path.join(REPO_ROOT, 'templates', 'ui');
 const EXAMPLES_DIR = path.join(REPO_ROOT, 'examples');
+assertNodeVersion(REPO_ROOT);
 
 /** Template paths (pre-rename) generated once and then owned by the author. */
 const SEED_FILES = new Set(
@@ -84,6 +86,7 @@ const KNOWN_TOKENS = [
   '__PANEL_API_IMPORTS__',
   '__LEDGER_FIELDS__',
   '__CIRCUIT_LIST__',
+  '__CIRCUIT_CALLS__',
   '__DEPLOYMENT_OPS__',
   '__TEST_BODY__',
 ];
@@ -169,12 +172,53 @@ if (managed === null) {
 }
 
 // --- read the compiled contract ---------------------------------------------
+// `maxval` can exceed 2^53 (Uint<64>, Uint<128>, ...). Keep its exact source
+// text instead of letting JSON.parse round it to a float.
 const info = JSON.parse(
   fs.readFileSync(path.join(managedRoot, managed, 'compiler', 'contract-info.json'), 'utf8'),
+  (key, value, ctx) => (key === 'maxval' ? ctx.source : value),
 );
+
+/**
+ * contract-info.json argument type → an ArgType literal for
+ * src/lib/circuit-args.ts, or null when it has no generic form. The TypeScript
+ * counterparts (bigint, boolean, string, Uint8Array, numeric enum) are the ones
+ * the compiler emits in contract/index.d.ts; see the table in circuit-args.ts.
+ */
+function argTypeLiteral(t) {
+  switch (t['type-name']) {
+    case 'Uint':
+      return `{ kind: "uint", max: ${t.maxval}n }`;
+    case 'Field':
+      return '{ kind: "field" }';
+    case 'Boolean':
+      return '{ kind: "boolean" }';
+    case 'Opaque':
+      return t.tsType === 'string' ? '{ kind: "string" }' : null;
+    case 'Bytes':
+      return `{ kind: "bytes", length: ${t.length} }`;
+    case 'Enum':
+      return `{ kind: "enum", values: [${t.elements.map((e) => JSON.stringify(e)).join(', ')}] }`;
+    case 'Alias':
+      return argTypeLiteral(t.type);
+    default:
+      return null;
+  }
+}
+const typeLabel = (t) => [t['type-name'], t.name, t.tsType].filter(Boolean).join(' ');
+
 const circuits = info.circuits
   .filter((c) => c.proof)
-  .map((c) => ({ name: c.name, args: c.arguments.map((a) => a.name) }));
+  .map((c) => {
+    const unsupported = c.arguments.filter((a) => argTypeLiteral(a.type) === null);
+    return {
+      name: c.name,
+      args: c.arguments.map((a) => a.name),
+      specs: unsupported.length ? null : c.arguments.map((a) => ({ name: a.name, type: argTypeLiteral(a.type) })),
+      todo: unsupported.map((a) => `${a.name} is a ${typeLabel(a.type)}`).join(', '),
+    };
+  });
+const formCircuits = circuits.filter((c) => c.specs);
 const ledgerFields = info.ledger.filter((l) => l.exported).map((l) => l.name);
 const hasWitnesses = info.witnesses.length > 0;
 
@@ -193,6 +237,7 @@ const hasCtorArgs = !dts.includes(
 // template convention).
 let factory = null;
 let factoryTakesArgs = false;
+let witnessesExport = null;
 if (hasWitnesses) {
   const witnessesPath = path.join(exampleDir, 'contract', 'witnesses.ts');
   if (!fs.existsSync(witnessesPath)) {
@@ -208,7 +253,16 @@ if (hasWitnesses) {
   }
   factory = m[1];
   factoryTakesArgs = m[2].trim() !== '';
+  // `witnesses`, or `<contract>Witnesses` when one file serves several
+  // contracts (shielded-chips: rouletteWitnesses, chipsWitnesses).
+  const perContract = `${managed.replace(/[-_](\w)/g, (_, c) => c.toUpperCase())}Witnesses`;
+  witnessesExport = [`witnesses`, perContract].find((n) => new RegExp(`export const ${n}\\b`).test(src));
+  if (!witnessesExport) {
+    fail(`examples/${name}/contract/witnesses.ts exports neither \`witnesses\` nor \`${perContract}\`.`);
+  }
 }
+// Import specifier that binds the contract's witnesses to `witnesses`.
+const witnessesSpecifier = witnessesExport === 'witnesses' ? 'witnesses' : `${witnessesExport} as witnesses`;
 // Can the UI build the initial private state on its own?
 const psAuto = !factoryTakesArgs;
 
@@ -218,15 +272,96 @@ const camelName = Name[0].toLowerCase() + Name.slice(1);
 
 // Wrapper names share a module with these identifiers.
 const taken = new Set([
-  'deployContract', 'findDeployedContract', 'map', 'ledger', 'ledger$', 'PRIVATE_STATE_ID',
+  'deployContract', 'findDeployedContract', 'map', 'ledger', 'ledger$', 'PRIVATE_STATE_ID', 'CircuitArgs',
   'createInitialPrivateState', 'ConstructorArgs', `Compiled${Name}Contract`, `deploy${Name}`,
   `join${Name}`, `${Name}Contract`,
+  // the panel imports the wrappers next to these
+  'CIRCUITS', 'CALLS', 'CircuitForm', 'LEDGER_FIELDS', 'formatValue', 'useMemo', 'useContractState',
+  'useDeployment', 'DeploymentCard', 'Card', 'CardContent', 'CardDescription', 'CardHeader',
+  'CardTitle', 'ArgSpec', 'CircuitSpec',
 ]);
 for (const c of circuits) {
-  if (taken.has(c.name)) fail(`circuit '${c.name}' collides with an identifier in ${name}-api.ts — rename it there by hand.`);
+  if (taken.has(c.name)) fail(`circuit '${c.name}' collides with an identifier in the generated ${name}-api.ts or ${name}-panel.tsx.`);
 }
 
 // --- generated blocks ------------------------------------------------------
+
+/** The seed in-memory circuits test (src/__tests__/__name__-circuits.test.ts). */
+function testBody() {
+  const constructs = !hasCtorArgs && psAuto;
+  const wrappers = circuits.map((c) => c.name);
+  const lines = [
+    `import { describe, ${constructs ? 'expect, ' : ''}${wrappers.length ? 'expectTypeOf, ' : ''}it } from "vitest";`,
+    ...(wrappers.length
+      ? ['import type { FinalizedCallTxData } from "@midnight-ntwrk/midnight-js-contracts";']
+      : []),
+    ...(constructs
+      ? [
+          'import { createConstructorContext } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";',
+          'import { Contract, createInitialPrivateState, ledger } from "../midnight/contract";',
+        ]
+      : wrappers.length
+        ? ['import type { Contract } from "../midnight/contract";']
+        : []),
+    ...(wrappers.length ? [`import { ${wrappers.join(', ')} } from "../midnight/__name__-api";`] : []),
+    ...(constructs && hasWitnesses
+      ? [
+          `import { ${witnessesSpecifier} } from "../../../contract/witnesses.js";`,
+        ]
+      : []),
+    '',
+    ...(constructs ? ['const COIN_PK = "00".repeat(32);', ''] : []),
+    'describe("__name__ contract (in memory)", () => {',
+    ...(constructs
+      ? [
+          '  it("constructs and decodes the initial ledger", () => {',
+          `    const contract = new Contract(${hasWitnesses ? 'witnesses' : '{}'});`,
+          '    const { currentContractState } = contract.initialState(',
+          '      createConstructorContext(createInitialPrivateState(), COIN_PK),',
+          '    );',
+          '    expect(ledger(currentContractState.data)).toBeDefined();',
+          '  });',
+        ]
+      : [
+          `  // TODO: constructing the contract needs ${needs}; take values from the`,
+          '  // Node test in examples/__name__/src/test/.',
+          '  it.todo("constructs and decodes the initial ledger");',
+        ]),
+    ...(circuits.length
+      ? [
+          '',
+          '  // TODO: one test per circuit, asserting on the ledger the UI will show:',
+          '  //   const ctx = createCircuitContext(dummyContractAddress(), COIN_PK,',
+          '  //     currentContractState, createInitialPrivateState());',
+          '  //   const { context } = contract.impureCircuits.<circuit>(ctx, ...args);',
+          '  //   expect(ledger(context.currentQueryContext.state)).toEqual(...);',
+          ...circuits.map((c) => `  it.todo(${JSON.stringify(`${c.name}(${c.args.join(', ')})`)});`),
+        ]
+      : []),
+    '});',
+  ];
+  if (wrappers.length) {
+    lines.push(
+      '',
+      '// Checked by `tsc -b` (the typecheck script); expectTypeOf does nothing at',
+      '// runtime. Each wrapper must hit the callTx overload that proves, submits and',
+      '// waits for finalization, and take exactly the circuit\'s arguments (counted',
+      '// from contract-info.json) after the contract handle.',
+      'describe("__name__ circuit wrappers (types)", () => {',
+      '  it("submit through callTx with exactly the circuit\'s arguments", () => {',
+      ...circuits.flatMap((c) => [
+        `    expectTypeOf<Awaited<ReturnType<typeof ${c.name}>>>().toEqualTypeOf<`,
+        `      FinalizedCallTxData<Contract, ${JSON.stringify(c.name)}>`,
+        '    >();',
+        `    expectTypeOf<Parameters<typeof ${c.name}>["length"]>().toEqualTypeOf<${c.args.length + 1}>();`,
+      ]),
+      '  });',
+      '});',
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
 const needs = [hasCtorArgs && 'constructor args', !psAuto && 'an initial private state']
   .filter(Boolean)
   .join(' and ');
@@ -271,14 +406,25 @@ const blocks = {
   __DEPLOY_ARGS__: hasCtorArgs ? '\n    args,' : '',
   __JOIN_PARAMS__: psAuto ? '' : '\n  initialPrivateState: __Name__PrivateState,',
   __INITIAL_PS__: psAuto ? 'initialPrivateState: createInitialPrivateState()' : 'initialPrivateState',
-  __CIRCUIT_WRAPPERS__: circuits
+  __CIRCUIT_WRAPPERS__: circuits.length === 0 ? '' : [
+    '',
+    '/**',
+    " * A circuit's arguments without its leading CircuitContext, i.e. what",
+    ' * `contract.callTx.<circuit>(...)` takes. Not `Parameters<callTx[c]>`: callTx',
+    ' * members are overloaded, and `Parameters` picks the last overload, whose',
+    ' * first parameter is a TransactionContext.',
+    ' */',
+    'export type CircuitArgs<K extends keyof Contract["provableCircuits"]> =',
+    '  Parameters<Contract["provableCircuits"][K]> extends [unknown, ...infer A] ? A : never;',
+    '',
+  ].join('\n') + circuits
     .map((c) =>
       [
         '',
         `/** Circuit \`${c.name}(${c.args.join(', ')})\`. */`,
         `export async function ${c.name}(`,
         '  contract: __Name__Contract,',
-        `  ...args: Parameters<__Name__Contract["callTx"][${JSON.stringify(c.name)}]>`,
+        `  ...args: CircuitArgs<${JSON.stringify(c.name)}>`,
         ') {',
         `  return contract.callTx.${c.name}(...args);`,
         '}',
@@ -290,13 +436,37 @@ const blocks = {
     !hasCtorArgs && psAuto && `deploy${Name}`,
     psAuto && `join${Name}`,
     'ledger$',
+    ...formCircuits.map((c) => c.name),
+    formCircuits.length > 0 && 'type CircuitArgs',
+    `type ${Name}Contract`,
   ]
     .filter(Boolean)
-    .join(', '),
+    .map((i) => `\n  ${i},`)
+    .join('') + '\n',
   __LEDGER_FIELDS__: JSON.stringify(ledgerFields).replaceAll('","', '", "'),
   __CIRCUIT_LIST__: circuits.length
-    ? `[\n${circuits.map((c) => `  { name: ${JSON.stringify(c.name)}, args: [${c.args.map((a) => JSON.stringify(a)).join(', ')}] },`).join('\n')}\n]`
+    ? `[\n${circuits
+        .map((c) =>
+          c.specs?.length === 0
+            ? `  { name: ${JSON.stringify(c.name)}, args: [] },`
+            : c.specs
+            ? [
+                `  {`,
+                `    name: ${JSON.stringify(c.name)},`,
+                `    args: [`,
+                ...c.specs.map((a) => `      { name: ${JSON.stringify(a.name)}, type: ${a.type} },`),
+                `    ],`,
+                `  },`,
+              ].join('\n')
+            : `  { name: ${JSON.stringify(c.name)}, args: null, todo: ${JSON.stringify(c.todo)} },`,
+        )
+        .join('\n')}\n]`
     : '[]',
+  __CIRCUIT_CALLS__: formCircuits.length
+    ? `{\n${formCircuits
+        .map((c) => `  ${c.name}: (contract, args) => ${c.name}(contract, ...(args as CircuitArgs<${JSON.stringify(c.name)}>)),`)
+        .join('\n')}\n}`
+    : '{}',
   __DEPLOYMENT_OPS__: [
     ...(!hasCtorArgs && psAuto
       ? ['    deploy: deploy__Name__,']
@@ -312,45 +482,7 @@ const blocks = {
           '    join: () => Promise.reject(new Error("TODO: supply the initial private state to join__Name__")),',
         ]),
   ].join('\n'),
-  __TEST_BODY__:
-    !hasCtorArgs && psAuto
-      ? [
-          'import { describe, expect, it } from "vitest";',
-          'import { createConstructorContext } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";',
-          'import { Contract, createInitialPrivateState, ledger } from "../midnight/contract";',
-          ...(hasWitnesses ? ['import { witnesses } from "../../../contract/witnesses.js";'] : []),
-          '',
-          'const COIN_PK = "00".repeat(32);',
-          '',
-          'describe("__name__ contract (in memory)", () => {',
-          '  it("constructs and decodes the initial ledger", () => {',
-          `    const contract = new Contract(${hasWitnesses ? 'witnesses' : '{}'});`,
-          '    const { currentContractState } = contract.initialState(',
-          '      createConstructorContext(createInitialPrivateState(), COIN_PK),',
-          '    );',
-          '    expect(ledger(currentContractState.data)).toBeDefined();',
-          '',
-          '    // TODO: call each circuit and assert on the ledger the UI will show:',
-          '    //   const ctx = createCircuitContext(dummyContractAddress(), COIN_PK,',
-          '    //     currentContractState, createInitialPrivateState());',
-          '    //   const { context } = contract.impureCircuits.<circuit>(ctx, ...args);',
-          '    //   expect(ledger(context.currentQueryContext.state)).toEqual(...);',
-          ...circuits.map((c) => `    //   ${c.name}(${c.args.join(', ')})`),
-          '  });',
-          '});',
-          '',
-        ].join('\n')
-      : [
-          'import { describe, it } from "vitest";',
-          '',
-          'describe("__name__ contract (in memory)", () => {',
-          `  // TODO: constructing the contract needs ${needs}; take values from the`,
-          '  // Node test in examples/__name__/src/test/, then run each circuit with',
-          '  // createCircuitContext + contract.impureCircuits.<circuit>(ctx, ...args).',
-          '  it.todo("constructs and decodes the initial ledger");',
-          '});',
-          '',
-        ].join('\n'),
+  __TEST_BODY__: testBody(),
 };
 
 function render(raw, rel) {
@@ -359,7 +491,7 @@ function render(raw, rel) {
   out = hasWitnesses
     ? out.replaceAll(
         '__WITNESS_IMPORT__',
-        `import { ${factory}, witnesses } from "../../../contract/witnesses.js";`,
+        `import { ${factory}, ${witnessesSpecifier} } from "../../../contract/witnesses.js";`,
       )
     : out.replaceAll('__WITNESS_IMPORT__\n', '');
   // Blocks first (they contain name tokens), then names.
@@ -376,6 +508,26 @@ const files = renderTree(TEMPLATE_DIR, {
   render,
 });
 
+// --- manifest ----------------------------------------------------------------
+// ui/.template-files lists the template-owned files as of the last create or
+// sync. Without it, a file removed from templates/ui would linger in every
+// generated UI and --check couldn't tell it from a file the author added.
+const MANIFEST = '.template-files';
+const posix = (p) => p.split(path.sep).join('/');
+const templateOwned = files.filter((f) => !SEED_FILES.has(f.templateRel)).map((f) => posix(f.rel)).sort();
+const manifestContent =
+  '# Template-owned files, written by `yarn new:ui`. Do not edit; --sync rewrites it.\n' +
+  templateOwned.map((f) => `${f}\n`).join('');
+function readManifest() {
+  const p = path.join(uiDir, MANIFEST);
+  if (!fs.existsSync(p)) return null;
+  return fs.readFileSync(p, 'utf8').split('\n').filter((l) => l && !l.startsWith('#'));
+}
+/** Files the template used to own that still exist on disk. */
+const stale = (readManifest() ?? []).filter(
+  (f) => !templateOwned.includes(f) && fs.existsSync(path.join(uiDir, ...f.split('/'))),
+);
+
 // --- check / sync ------------------------------------------------------------
 if (mode === 'check') {
   const drift = [];
@@ -384,11 +536,19 @@ if (mode === 'check') {
     const actual = fs.existsSync(onDisk) ? fs.readFileSync(onDisk, 'utf8') : null;
     if (actual !== f.content) drift.push({ ...f, actual });
   }
-  if (drift.length === 0) {
+  const manifestOnDisk = fs.existsSync(path.join(uiDir, MANIFEST))
+    ? fs.readFileSync(path.join(uiDir, MANIFEST), 'utf8')
+    : null;
+  const problems = [];
+  if (manifestOnDisk === null) problems.push(`  ${MANIFEST}  (missing)`);
+  else if (manifestOnDisk !== manifestContent) problems.push(`  ${MANIFEST}  (out of date)`);
+  for (const f of stale) problems.push(`  ${f}  (no longer in templates/ui)`);
+  if (drift.length === 0 && problems.length === 0) {
     console.log(`✔ examples/${name}/ui matches templates/ui (${files.length} template-owned files)`);
     process.exit(0);
   }
-  console.error(`✖ examples/${name}/ui has drifted from templates/ui in ${drift.length} file(s):\n`);
+  console.error(`✖ examples/${name}/ui has drifted from templates/ui in ${drift.length + problems.length} file(s):\n`);
+  for (const p of problems) console.error(p);
   for (const d of drift) {
     console.error(`  ${d.rel}${d.actual === null ? '  (missing)' : ''}  ← templates/ui/${d.templateRel}`);
     if (d.actual !== null) console.error(firstDifference(d.content, d.actual));
@@ -398,6 +558,9 @@ if (mode === 'check') {
       `  templates/ui/ (then \`yarn new:ui ${name} --sync\` here and in any other UI), or, if it is\n` +
       '  example-specific, move it into a seed file (the api, panel, or circuits test).',
   );
+  if (problems.length) {
+    console.error(`  A missing/out-of-date ${MANIFEST} or a stale file is fixed by \`yarn new:ui ${name} --sync\`.`);
+  }
   process.exit(1);
 }
 
@@ -414,9 +577,12 @@ function firstDifference(expected, actual) {
 }
 
 const written = writeFiles(uiDir, files).map((p) => path.relative(REPO_ROOT, p));
+fs.writeFileSync(path.join(uiDir, MANIFEST), manifestContent);
 
 if (mode === 'sync') {
+  for (const f of stale) fs.rmSync(path.join(uiDir, ...f.split('/')));
   console.log(`✔ Rewrote ${written.length} template-owned files in examples/${name}/ui (seed files untouched).`);
+  if (stale.length) console.log(`  Removed ${stale.length} file(s) no longer in templates/ui: ${stale.join(', ')}`);
   console.log('  Review with `git diff`, then typecheck and test:unit.');
   process.exit(0);
 }
@@ -440,5 +606,5 @@ console.log('\n  Next steps:');
 console.log('    1. yarn install   (the new workspace changes yarn.lock; commit it — CI uses --immutable)');
 console.log(`    2. yarn workspace ${pkg}-ui typecheck && yarn workspace ${pkg}-ui test:unit && yarn workspace ${pkg}-ui build`);
 console.log('    3. Build the use case into the seed files above');
-console.log('    4. Work through the verification checklist in examples/hello-world/ui/AGENTS.md');
+console.log(`    4. Work through the verification checklist in examples/${name}/ui/AGENTS.md`);
 console.log('');
