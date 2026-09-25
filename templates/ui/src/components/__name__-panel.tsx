@@ -8,10 +8,11 @@ import { DeploymentCard } from "@/components/deployment-card";
 import { useContractState } from "@/hooks/use-contract-state";
 import { useDeployment } from "@/hooks/use-deployment";
 import type { ArgSpec } from "@/lib/circuit-args";
+import { formatLedgerValue, type LedgerField } from "@/lib/ledger-format";
 import {__PANEL_API_IMPORTS__} from "@/midnight/__name__-api";
 
-/** Exported ledger fields, from contract-info.json. */
-const LEDGER_FIELDS = __LEDGER_FIELDS__ as const;
+/** Exported ledger fields and how they're stored, from contract-info.json. */
+const LEDGER_FIELDS: LedgerField[] = __LEDGER_FIELDS__;
 
 /**
  * Provable circuits and their argument types, from contract-info.json. `args`
@@ -53,9 +54,11 @@ __DEPLOYMENT_OPS__
               ) : (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
                   {LEDGER_FIELDS.map((field) => (
-                    <div key={field} className="contents">
-                      <dt className="font-mono text-muted-foreground">{field}</dt>
-                      <dd className="break-all font-mono">{formatValue(state[field])}</dd>
+                    <div key={field.name} className="contents">
+                      <dt className="font-mono text-muted-foreground">{field.name}</dt>
+                      <dd className="break-all font-mono">
+                        {formatLedgerValue(field, state[field.name as keyof typeof state])}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -103,20 +106,4 @@ __DEPLOYMENT_OPS__
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );
-}
-
-/** Best-effort display of a decoded ledger value. Replace with real rendering. */
-function formatValue(value: unknown): string {
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Uint8Array) {
-    return Array.from(value, (b) => b.toString(16).padStart(2, "0")).join("");
-  }
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  const size = (value as { size?: unknown }).size;
-  if (typeof size === "function") return `${String(size.call(value))} entries`;
-  try {
-    return JSON.stringify(value, (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v));
-  } catch {
-    return "(complex value)";
-  }
 }

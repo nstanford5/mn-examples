@@ -15,17 +15,27 @@ import { CompiledContract } from "@midnight-ntwrk/midnight-js-protocol/compact-j
 import {
   Contract,
   ledger,
+  pureCircuits,
   type Ledger,
 } from "../../../contract/managed/__MANAGED__/contract/index.js";
 __WITNESS_IMPORT__
+import type { PrivateStateStorage } from "./private-state";
 
-export { Contract, ledger, type Ledger };
+// pureCircuits run locally with no proof and no tx (e.g. deriving a public
+// key from a secret to find "which player am I" on the ledger).
+export { Contract, ledger, pureCircuits, type Ledger };
 
 /** Every provable circuit, i.e. every ZK key set copy-zk.mjs serves. */
 export type __Name__Circuits = __CIRCUIT_UNION__;
 
 __PRIVATE_STATE_BLOCK__
 export const PRIVATE_STATE_ID = "__camelName__PrivateState";
+
+/**
+ * Where private state is kept (`yarn new:ui --private-state`, recorded in
+ * ui/new-ui.json): __PRIVATE_STATE_STORAGE_DOC__
+ */
+export const PRIVATE_STATE_STORAGE: PrivateStateStorage = "__PRIVATE_STATE_STORAGE__";
 
 /** Where copy-zk.mjs puts the keys and zkir, relative to the page origin. */
 export const ZK_ASSETS_PATH = "managed/__MANAGED__";

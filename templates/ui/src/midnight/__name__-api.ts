@@ -44,16 +44,30 @@ export async function deploy__Name__(
  * Attach to an existing deployment by address. findDeployedContract fetches
  * the on-chain state and checks that its verifier keys match the ones we serve
  * (a wrong address or a different contract fails here, before any tx).
+ *
+ * Private state: findDeployedContract *overwrites* whatever is stored under
+ * PRIVATE_STATE_ID whenever it is given an `initialPrivateState`. So reuse the
+ * stored state when there is one (a reload, or the deployer re-joining with a
+ * persistent store) and only fall back to a fresh initial state otherwise.
  */
 export async function join__Name__(
   providers: __Name__Providers,
   address: ContractAddress,__JOIN_PARAMS__
 ): Promise<__Name__Contract> {
+  providers.privateStateProvider.setContractAddress(address);
+  const stored = await providers.privateStateProvider.get(PRIVATE_STATE_ID);
+  if (stored !== null) {
+    return findDeployedContract(providers, {
+      compiledContract: Compiled__Name__Contract,
+      contractAddress: address,
+      privateStateId: PRIVATE_STATE_ID,
+    });
+  }
   return findDeployedContract(providers, {
     compiledContract: Compiled__Name__Contract,
     contractAddress: address,
     privateStateId: PRIVATE_STATE_ID,
-    __INITIAL_PS__,
+    initialPrivateState: __JOIN_INITIAL_PS__,
   });
 }
 

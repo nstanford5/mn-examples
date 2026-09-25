@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,10 +10,21 @@ import { useWallet } from "@/hooks/use-wallet";
 /**
  * The generic "1. Contract" step: provider status, the no-DUST warning, and
  * deploy / join / forget. The example-specific panel renders this first and
- * its own circuit and ledger cards below it once `deployment.address` is set.
+ * its own circuit and ledger cards below it once `deployment.contract` is set.
+ *
+ * `deployForm` replaces the plain "Deploy" button when deploying needs input
+ * (constructor args, private-state inputs). It must call
+ * `deployment.deploy(input)` itself. Without it, the button calls `deploy()`
+ * with no input, which is only right when the ops' input type is `void`.
  */
-export function DeploymentCard<T>({ deployment }: { deployment: Deployment<T> }) {
-  const { providers, providersError, networkId, address, busy } = deployment;
+export function DeploymentCard<T, I = void>({
+  deployment,
+  deployForm,
+}: {
+  deployment: Deployment<T, I>;
+  deployForm?: ReactNode;
+}) {
+  const { providers, providersError, networkId, address, contract, busy, error } = deployment;
   const [joinInput, setJoinInput] = useState("");
   const dust = useDustBalance();
 
@@ -49,6 +60,12 @@ export function DeploymentCard<T>({ deployment }: { deployment: Deployment<T> })
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-muted-foreground">Address</span>
               <code className="break-all rounded bg-muted px-2 py-1">{address}</code>
+              {!contract && busy === null && error && (
+                <Button variant="outline" size="sm" onClick={() => void deployment.rejoin()}>
+                  Retry join
+                </Button>
+              )}
+              {busy === "joining" && <Loader2 className="size-4 animate-spin" />}
               <Button
                 variant="ghost"
                 size="sm"
@@ -60,14 +77,16 @@ export function DeploymentCard<T>({ deployment }: { deployment: Deployment<T> })
             </div>
           ) : (
             <>
-              <Button
-                onClick={() => void deployment.deploy()}
-                disabled={busy !== null}
-                className="self-start"
-              >
-                {busy === "deploying" && <Loader2 className="animate-spin" />}
-                Deploy new contract
-              </Button>
+              {deployForm ?? (
+                <Button
+                  onClick={() => void deployment.deploy(undefined as I)}
+                  disabled={busy !== null}
+                  className="self-start"
+                >
+                  {busy === "deploying" && <Loader2 className="animate-spin" />}
+                  Deploy new contract
+                </Button>
+              )}
               <form
                 className="flex gap-2"
                 onSubmit={(e) => {
