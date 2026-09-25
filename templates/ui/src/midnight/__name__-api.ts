@@ -10,13 +10,17 @@ import {
   type FoundContract,
 } from "@midnight-ntwrk/midnight-js-contracts";
 import type { ContractAddress } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";
+// @if ledger
 import { map, type Observable } from "rxjs";
+// @endif
 import {
   Compiled__Name__Contract,
-  __PS_CONTRACT_IMPORT__ledger,
-  PRIVATE_STATE_ID,
+  __PS_CONTRACT_IMPORT__PRIVATE_STATE_ID,
   type Contract,
+  // @if ledger
+  ledger,
   type Ledger,
+  // @endif
 } from "./contract";
 import type { __Name__Providers } from "./providers";
 
@@ -75,6 +79,7 @@ export async function join__Name__(
 // proves it (wallet or proof server), then gets the wallet to balance and
 // submit it. Each resolves once the tx is final on chain.
 __CIRCUIT_WRAPPERS__
+// @if ledger
 /**
  * Live view of the public ledger. The indexer pushes each new contract state
  * over its websocket, and the compiler-generated `ledger()` decodes it.
@@ -87,3 +92,4 @@ export function ledger$(
     .contractStateObservable(address, { type: "latest" })
     .pipe(map((state) => ledger(state.data)));
 }
+// @endif

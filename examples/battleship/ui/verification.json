@@ -1,0 +1,18 @@
+{
+  "steps": {
+    "browser": {
+      "status": "verified",
+      "date": "2026-09-24",
+      "notes": "The persistent store wrote a battleship private state to IndexedDB and read it back after a reload (`bigint`s and a byte-identical secret key). A wrong passphrase was refused with `WrongPassphraseError`. The constructor, `acceptGame` (with witnesses) and the pure `getDappPubKey` ran in the page. The vitest suite replays the Node test's game, both cheat attempts included."
+    },
+    "laceDeploy": {
+      "status": "not-run"
+    },
+    "laceCalls": {
+      "status": "not-run"
+    },
+    "preprod": {
+      "status": "not-run"
+    }
+  }
+}

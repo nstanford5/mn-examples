@@ -1,0 +1,20 @@
+{
+  "steps": {
+    "browser": {
+      "status": "verified",
+      "date": "2026-09-24",
+      "notes": "The page loaded, the WASM ledger and a circuit ran in it, and ZK assets were served as binaries."
+    },
+    "laceDeploy": {
+      "status": "partial",
+      "date": "2026-09-24",
+      "notes": "A deploy tx was built and proven by the local proof server, and `yarn fund:wallet` got DUST to the Lace wallet. This predates the move of deploy/join/forget into `hooks/use-deployment.ts` and `components/deployment-card.tsx`; re-run it before calling that verified. The moved `yarn fund:wallet` (packages/fast-sync, one sponsor per wallet) was run twice against a throwaway seed wallet, not Lace: the wallet received 1,000 NIGHT and accruing DUST, and the rerun took the \"already sponsored\" path."
+    },
+    "laceCalls": {
+      "status": "not-run"
+    },
+    "preprod": {
+      "status": "not-run"
+    }
+  }
+}

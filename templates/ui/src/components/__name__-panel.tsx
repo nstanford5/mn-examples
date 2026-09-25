@@ -1,18 +1,29 @@
 // Seed file: generated once by `yarn new:ui`, then yours to edit. The drift
 // check ignores it. Replace the ledger readout and the generic circuit forms
 // with the example's own UI; keep <DeploymentCard> as step 1.
+// @if ledger
 import { useMemo } from "react";
+// @endif
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CircuitForm } from "@/components/circuit-form";
 import { DeploymentCard } from "@/components/deployment-card";
+// @if tokens
+import { WalletBalancesCard } from "@/components/wallet-balances-card";
+// @endif
+// @if ledger
 import { useContractState } from "@/hooks/use-contract-state";
+// @endif
 import { useDeployment } from "@/hooks/use-deployment";
 import type { ArgSpec } from "@/lib/circuit-args";
+// @if ledger
 import { formatLedgerValue, type LedgerField } from "@/lib/ledger-format";
+// @endif
 import {__PANEL_API_IMPORTS__} from "@/midnight/__name__-api";
 
+// @if ledger
 /** Exported ledger fields and how they're stored, from contract-info.json. */
 const LEDGER_FIELDS: LedgerField[] = __LEDGER_FIELDS__;
+// @endif
 
 /**
  * Provable circuits and their argument types, from contract-info.json. `args`
@@ -22,7 +33,10 @@ const LEDGER_FIELDS: LedgerField[] = __LEDGER_FIELDS__;
 type CircuitSpec = { name: string; args: ArgSpec[] } | { name: string; args: null; todo: string };
 const CIRCUITS: CircuitSpec[] = __CIRCUIT_LIST__;
 
-/** Submits a circuit through its wrapper in @/midnight/__name__-api. */
+/**
+ * Submits a circuit through its wrapper in @/midnight/__name__-api and
+ * resolves to the circuit's return value, which <CircuitForm> shows.
+ */
 const CALLS: Record<string, (contract: __Name__Contract, args: unknown[]) => Promise<unknown>> = __CIRCUIT_CALLS__;
 
 export function __Name__Panel() {
@@ -30,12 +44,14 @@ export function __Name__Panel() {
 __DEPLOYMENT_OPS__
   });
   const { providers, contract, address, busy, error, run } = deployment;
+  // @if ledger
 
   const ledgerObservable = useMemo(
     () => (providers && address ? ledger$(providers, address) : null),
     [providers, address],
   );
   const { state, error: stateError } = useContractState(ledgerObservable);
+  // @endif
 
   return (
     <div className="flex flex-col gap-6">
@@ -43,6 +59,7 @@ __DEPLOYMENT_OPS__
 
       {providers && address && (
         <>
+          {/* @if ledger */}
           <Card>
             <CardHeader>
               <CardTitle>2. Ledger</CardTitle>
@@ -66,13 +83,20 @@ __DEPLOYMENT_OPS__
               {stateError && <p className="text-xs text-destructive">{stateError.message}</p>}
             </CardContent>
           </Card>
+          {/* @endif */}
+          {/* @if tokens */}
+
+          {/* busy flips when a call starts and ends, so it doubles as a refresh key. */}
+          <WalletBalancesCard title="__BALANCES_STEP__. Your wallet" refreshKey={busy} />
+          {/* @endif */}
 
           <Card>
             <CardHeader>
-              <CardTitle>3. Circuits</CardTitle>
+              <CardTitle>__CIRCUITS_STEP__. Circuits</CardTitle>
               <CardDescription>
                 One generic form per circuit. Each call runs the circuit locally, proves it, then
-                asks the wallet to balance and submit it.
+                asks the wallet to balance and submit it. What a circuit returns is shown under
+                its form.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -84,12 +108,14 @@ __DEPLOYMENT_OPS__
                     args={c.args}
                     busy={busy === c.name}
                     disabled={busy !== null || !contract}
-                    onSubmit={(values) =>
-                      void run(c.name, async () => {
+                    onSubmit={async (values) => {
+                      let result: unknown;
+                      const ok = await run(c.name, async () => {
                         const call = CALLS[c.name];
-                        if (contract && call) await call(contract, values);
-                      })
-                    }
+                        if (contract && call) result = await call(contract, values);
+                      });
+                      return ok ? { ok: true, result } : { ok: false };
+                    }}
                   />
                 ) : (
                   <p key={c.name} className="text-sm text-muted-foreground">

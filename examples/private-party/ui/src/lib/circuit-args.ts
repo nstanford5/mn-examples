@@ -13,10 +13,20 @@
 //   Enum (elements)                   numeric enum   { kind: "enum", values }
 //   Struct UserAddress { bytes: Bytes<32> }
 //                                     { bytes }      { kind: "userAddress" }
+//   Struct ZswapCoinPublicKey { bytes: Bytes<32> }
+//                                     { bytes }      { kind: "coinPublicKey" }
+//   Struct ShieldedCoinInfo { nonce, color: Bytes<32>, value: Uint<128> }
+//                                     { nonce, color, value }
+//                                                    { kind: "shieldedCoin" }
 //   Alias                             its target type (unwrapped)
 //
 // A UserAddress field takes a Bech32m unshielded address (mn_addr_...) or
-// 32 bytes of hex, and the form can fill it with the wallet's own address.
+// 32 bytes of hex, and the form can fill it with the wallet's own address. A
+// ZswapCoinPublicKey field is the same for a shielded recipient: a Bech32m
+// coin public key (mn_shield-cpk_...) or hex, or the wallet's own key. A
+// ShieldedCoinInfo can't be typed in: the field picks one of the coins that
+// earlier circuit results returned (lib/coin-book.ts), and its text is that
+// coin's nonce.
 // Other structs, tuples, vectors and opaque types get no generic form, and
 // neither does a Bytes argument named like a secret (see scripts/new-ui.mjs);
 // the generated panel leaves a TODO for those circuits instead.
@@ -24,7 +34,8 @@
 // Template-owned: edit templates/ui/src/lib/circuit-args.ts, then
 // `yarn new:ui <name> --sync`.
 import { MAX_FIELD } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";
-import { userAddressFromBech32 } from "@/lib/addresses";
+import { coinPublicKeyFromBech32, userAddressFromBech32 } from "@/lib/addresses";
+import type { BookedCoin } from "@/lib/coin-book";
 
 export type ArgType =
   | { kind: "uint"; max: bigint }
@@ -33,11 +44,15 @@ export type ArgType =
   | { kind: "string" }
   | { kind: "bytes"; length: number }
   | { kind: "enum"; values: string[] }
-  | { kind: "userAddress" };
+  | { kind: "userAddress" }
+  | { kind: "coinPublicKey" }
+  | { kind: "shieldedCoin" };
 
 /** What parsing needs beyond the text: the wallet's network, for Bech32m. */
 export interface ParseContext {
   networkId?: string | null;
+  /** The coins a `shieldedCoin` field can pick from (lib/coin-book.ts). */
+  coins?: readonly BookedCoin[];
 }
 
 export interface ArgSpec {
@@ -98,6 +113,28 @@ export function parseArg(type: ArgType, text: string, ctx: ParseContext = {}): P
       return bytes.ok
         ? { ok: true, value: { bytes: bytes.value } }
         : { ok: false, reason: "an mn_addr_ address, or 32 bytes as 64 hex characters" };
+    }
+    case "coinPublicKey": {
+      if (t.startsWith("mn_")) {
+        if (!ctx.networkId) return { ok: false, reason: "connect a wallet to read mn_shield-cpk_ keys" };
+        try {
+          return { ok: true, value: coinPublicKeyFromBech32(t, ctx.networkId) };
+        } catch {
+          return { ok: false, reason: `a shielded coin public key for ${ctx.networkId}` };
+        }
+      }
+      const bytes = parseHex(t, 32);
+      return bytes.ok
+        ? { ok: true, value: { bytes: bytes.value } }
+        : { ok: false, reason: "an mn_shield-cpk_ key, or 32 bytes as 64 hex characters" };
+    }
+    case "shieldedCoin": {
+      const booked = ctx.coins?.find((c) => c.id === t);
+      if (booked) return { ok: true, value: booked.coin };
+      return {
+        ok: false,
+        reason: ctx.coins?.length ? "pick a coin" : "no coins yet: run a circuit that returns one first",
+      };
     }
     case "enum": {
       const i = Number(t);

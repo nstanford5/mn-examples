@@ -7,7 +7,39 @@ one (`examples/hello-world/ui`), see `README.md` next to this file.
 
 This file is template-owned. Its source is `templates/ui/AGENTS.md`, and
 every generated UI gets an identical copy. Edit the template, then run
-`yarn new:ui --sync-all`. The worked examples:
+`yarn new:ui --sync-all`.
+
+**Verified against:** `midnight-js-*` 4.1.1, `@midnight-ntwrk/dapp-connector-api`
+4.0.1, Vite 6.4.3, vitest 4.1, React 19, Node 22, Lace on the local devnet.
+
+## Quick recipe
+
+```bash
+nvm use                                  # Node 22; the generator refuses older
+yarn new:ui <name> --dry-run             # preview: forms, TODOs, storage, ⚠ lines
+yarn new:ui <name> [--private-state memory|persistent]
+yarn install                             # commit the yarn.lock it writes
+yarn workspace @midnight-ntwrk/example-<name>-ui typecheck
+yarn workspace @midnight-ntwrk/example-<name>-ui test:unit
+yarn workspace @midnight-ntwrk/example-<name>-ui build
+```
+
+- **Your code goes in the seed files only** (§3):
+  `src/midnight/<name>-api.ts`, `src/components/<name>-panel.tsx`,
+  `src/__tests__/<name>-circuits.test.ts`, `README.md`, and
+  `verification.json`. Everything else is template-owned (§2), and CI fails
+  if an example's copy drifts.
+- **Generic changes go in `templates/ui/`**, then `yarn new:ui --sync-all`.
+- **Don't** scaffold with `/midnight-dapp-dev:init`, copy another UI, or use
+  `examples/zk-loan/ui` as a reference (it's hand-built and not
+  authoritative). Check what you reuse against the installed types in
+  `node_modules`.
+- **Before you claim it works:** run the verification checklist at the end
+  of this file. Record the steps CI can't run (browser, Lace, preprod) in
+  `ui/verification.json`, then `--sync`. The status of every UI is in
+  `templates/ui/VERIFIED.md`; don't claim more than it says.
+
+## Worked examples
 
 - `examples/hello-world/ui`: no witnesses.
 - `examples/calculator/ui`: a witness, custom forms.
@@ -18,64 +50,11 @@ every generated UI gets an identical copy. Edit the template, then run
   (the secret is passed to every circuit as an argument), `UserAddress`
   arguments filled from the wallet, unshielded NIGHT paid in and out, and
   role/identity derived without a pure circuit.
-
-**Verified against:** `midnight-js-*` 4.1.1, `@midnight-ntwrk/dapp-connector-api`
-4.0.1, Vite 6.4.3, vitest 4.1, React 19, Node 22, Lace on the local devnet.
-
-## What was actually verified
-
-Don't claim more than this when you reuse the pattern. Steps are the
-verification checklist at the end of this file. ✅ = run and passed,
-— = not run yet.
-
-| UI | 1–4: install, typecheck, unit, build (CI) | 6: in Chrome, no wallet | 7: Lace deploy | 7: Lace circuit calls | preprod |
-|---|---|---|---|---|---|
-| hello-world | ✅ | ✅ ¹ | ✅ ² | — | — |
-| calculator | ✅ | ✅ ³ | — | — | — |
-| battleship | ✅ | ✅ ⁴ | — | — | — |
-| private-party | ✅ | ✅ ⁵ | — | — | — |
-
-1. The page loaded, the WASM ledger and a circuit ran in it, and ZK assets
-   were served as binaries.
-2. A deploy tx was built and proven by the local proof server, and
-   `yarn fund:wallet` got DUST to the Lace wallet. This predates the move of
-   deploy/join/forget into `hooks/use-deployment.ts` and
-   `components/deployment-card.tsx`; re-run it before calling that verified.
-   The moved `yarn fund:wallet` (packages/fast-sync, one sponsor per wallet)
-   was run twice against a throwaway seed wallet, not Lace. The wallet
-   received 1,000 NIGHT and accruing DUST, and the rerun took the "already
-   sponsored" path.
-3. `divide` ran in the page, calling the `divMod` witness. That covers the
-   witness wiring only.
-4. The persistent store wrote a battleship private state to IndexedDB and
-   read it back after a reload (`bigint`s and a byte-identical secret key). A
-   wrong passphrase was refused with `WrongPassphraseError`. The
-   constructor, `acceptGame` (with witnesses) and the pure `getDappPubKey`
-   ran in the page. The vitest suite replays the Node test's game, both
-   cheat attempts included.
-5. The constructor and `rsvp` ran in the page. `lib/addresses.ts` decoded a
-   Bech32m unshielded address. A `{ secret }` private state survived a
-   reload, and a wrong passphrase was refused. The vitest suite replays the
-   Node test's party and checks, for every person and circuit at every step,
-   that `actionError` predicts what the contract accepts. Unrun with Lace:
-   `checkIn`'s NIGHT payment (the wallet must add it while balancing) and
-   `claimFees`'s payout.
-
-The Lace steps are TODO checklists in `examples/battleship/ui/README.md` and
-`examples/private-party/ui/README.md` ("TODO: end-to-end verification with
-Lace"). Leave a column at — until its checklist passes.
-
-Never run anywhere: wallet-delegated proving, a second browser profile
-joining, re-join after reload through the passphrase card in the full app.
-These template pieces are checked only by unit tests and CI builds:
-- the deploy-input slot and non-destructive re-join;
-- generic circuit forms, including `userAddress` and **Use my address**
-  (no form has submitted a real tx);
-- the funding hint's `mn_addr_` argument in `<DeploymentCard>`.
-
-- Do **not** use `examples/zk-loan/ui` as a reference. It isn't authoritative.
-  Use the generated UIs and the plugin docs, and check both against the installed
-  types in `node_modules`.
+- `examples/token-transfers/ui`: **no ledger at all** (every circuit moves
+  tokens), so `<WalletBalancesCard>` replaces the ledger readout. Most
+  circuits use the generic forms, including a `shieldedCoin` picker fed by
+  earlier results. The two mints get small forms that generate a fresh nonce.
+  The circuits test asserts on each call's `Effects`.
 
 ## The core idea
 
@@ -96,21 +75,13 @@ and swaps only the **providers** for browser versions:
 If the test suite passes, the contract side is right. Most UI bugs are in the
 provider swap and the bundler, not in contract calls.
 
-## Recipe: add `examples/<name>/ui`
+## Recipe in detail
 
 UIs are scaffolded by a script, not by hand. It is **phase 2**, after
 `yarn new:example` (phase 1). Run it only once the example's contract compiles
-and `yarn test:local` is green, because it reads the compiled output.
-
-```bash
-nvm use               # Node 22 (.nvmrc). Shells often default to 20: the generator
-                      # and the UI's dev/build refuse to run on it
-yarn new:ui <name> [--contract <managed-dir>] [--private-state memory|persistent]
-yarn install          # the new workspace changes yarn.lock; commit it
-yarn workspace @midnight-ntwrk/example-<name>-ui typecheck
-yarn workspace @midnight-ntwrk/example-<name>-ui test:unit
-yarn workspace @midnight-ntwrk/example-<name>-ui build
-```
+and `yarn test:local` is green, because it reads the compiled output. The
+commands are in the quick recipe above; `--contract <managed-dir>` picks one
+contract when an example compiles several.
 
 The root `workspaces` glob already includes `examples/*/ui`, so no root
 `package.json` change is needed.
@@ -126,7 +97,7 @@ witnesses file and the contract source:
 | `contract/managed/<c>/contract/index.d.ts` | whether the constructor takes arguments, and its parameter list (named in the TODOs) |
 | `contract/witnesses.ts` | the `create<X>PrivateState` factory and its parameters (it aborts if the file imports `node:*`). Read **even when the contract declares no witnesses**: a contract can take its secrets as circuit arguments (private-party), and the UI still has to keep them |
 | `contract-info.json` `ledger[].storage` / `.type` | the typed ledger readout: enum member names, Set/List/Map contents |
-| `contract/<c>.compact` (else every `contract/*.compact`) | only whether the contract moves unshielded tokens (`receiveUnshielded`, `sendUnshielded`, `unshieldedBalance*`), for the circuits-test hint in §3 |
+| `contract/<c>.compact` (else every `contract/*.compact`) | only which token operations it calls (`mint*Token`, `send*`/`receive*` for both shielded and unshielded tokens, `unshieldedBalance*`), for the circuits-test hints and the ⚠ lines in §3 |
 
 The create-time choices, `--contract` and `--private-state`, are written to
 `ui/new-ui.json`. `--check` and `--sync` read them back, so they re-render
@@ -149,16 +120,28 @@ It refuses to run when:
   enforce `engines`; run `nvm use` first. The UI's `copy:zk` (the first step
   of `dev` and `build`) has the same guard.
 
-Read its summary: it prints the circuits, the private-state factory and
-storage it chose, and a `⚠` line for anything left to you (constructor
-args, secret-like arguments, unshielded tokens).
+**Preview first:** `yarn new:ui <name> --dry-run [flags]` prints the same
+summary and writes nothing (it works even when `ui/` exists). Use it to
+choose `--private-state` before creating, because create refuses to overwrite
+`ui/`.
+
+Read its summary. It prints the circuits, which ones get generic forms, the
+ledger fields, and the private-state factory and storage it chose. Then it
+prints a `⚠` line for anything left to you: constructor args, secret or
+one-time arguments, arguments with no generic input, `ShieldedCoinInfo`
+arguments (their picker needs a circuit that returns coins), balance checks
+and token movements.
+
+Create also writes `ui/verification.json` with every step `not-run`, and
+adds the UI's row to `templates/ui/VERIFIED.md`.
 
 ### 2. Template-owned files: don't edit them in an example
 
 Everything except the seed files below comes from `templates/ui/`, rendered by
 name substitution. This covers configs, providers, wallet context, hooks,
-`lib/` (including `circuit-args.ts` and `ledger-format.ts`), generic
-components (including `deployment-card.tsx`, `circuit-form.tsx`,
+`lib/` (including `circuit-args.ts`, `ledger-format.ts`, `addresses.ts`,
+`coin-book.ts` and `tokens.ts`), generic components (including
+`deployment-card.tsx`, `circuit-form.tsx`, `wallet-balances-card.tsx`,
 `passphrase-card.tsx` and `hooks/use-deployment.ts`), `midnight/contract.ts`,
 `midnight/providers.ts`, `midnight/private-state.ts`, the generic tests and
 this `AGENTS.md`.
@@ -171,7 +154,9 @@ this `AGENTS.md`.
   unit tests and a production build. `--check` fails when an example's copy
   differs from the template, when `.template-files` is missing or out of date,
   or when a file the template no longer has is still present. `--sync` fixes
-  the last two, deleting the stale files.
+  the last two, deleting the stale files. `--check` also validates every
+  `verification.json` and fails when the table in `templates/ui/VERIFIED.md`
+  is stale (see the Verification checklist).
 - To change generic UI behaviour, edit `templates/ui/`. Then run
   `yarn new:ui --sync-all`. It syncs **every** generated UI, including one you
   created earlier in the same change. If a UI's `package.json` changed, it
@@ -198,7 +183,7 @@ contract. `providers.ts` keeps the parts that cost debugging time:
 ### 3. Seed files: yours to edit
 
 These are generated once as a working starting point. `--check` and `--sync`
-ignore them.
+don't rewrite them (they only validate `verification.json`).
 
 - **`src/midnight/<name>-api.ts`:**
   - `deploy<Name>` / `join<Name>`
@@ -217,20 +202,56 @@ ignore them.
   fresh secret key, and that should only happen once.
 - **`src/components/<name>-panel.tsx`:** `<DeploymentCard>` (step 1), a
   typed ledger readout (`lib/ledger-format.ts`: enum names, collection
-  contents), and one generic `<CircuitForm>` per circuit.
+  contents), and one generic `<CircuitForm>` per circuit. A contract with no
+  exported ledger fields gets no readout, and its api file gets no `ledger$`.
+  A contract that moves tokens gets `<WalletBalancesCard>` (below).
   - **Supported argument types:** Uint, Field, Boolean, `Opaque<"string">`,
-    Bytes, Enum, the stdlib `UserAddress`, and aliases of those (see the table
-    in `lib/circuit-args.ts`).
+    Bytes, Enum, the stdlib `UserAddress`, `ZswapCoinPublicKey` and
+    `ShieldedCoinInfo`, and aliases of those (see the table in
+    `lib/circuit-args.ts`).
   - **`UserAddress` fields** take an `mn_addr_…` or 64 hex characters. A
     **Use my address** button fills in the wallet's own unshielded address
-    (`walletUserAddress` in the template-owned `lib/addresses.ts`). Use that
-    helper in purpose-built UI too, rather than making users paste addresses.
+    (`walletUserAddress` in the template-owned `lib/addresses.ts`).
+  - **`ZswapCoinPublicKey` fields** (a shielded recipient) take an
+    `mn_shield-cpk_…` or 64 hex characters, and **Use my key** fills in the
+    wallet's own coin public key (`walletCoinPublicKey`). Use these helpers in
+    purpose-built UI too, rather than making users paste addresses. Inside
+    the api file, `encodeCoinPublicKey(providers.walletProvider.getCoinPublicKey())`
+    gives the same bytes without a wallet round trip (token-transfers'
+    `myCoinPublicKey`).
+  - **`ShieldedCoinInfo` fields** can't be typed in: the coin has to exist.
+    The field is a picker over the coins earlier calls *returned* in this
+    session (`lib/coin-book.ts`: `mintShieldedToken`'s coin,
+    `sendShielded`'s `sent`/`change`). Each entry says where it came from
+    ("mintAndSendShielded → sent"), because the book can't tell who holds a
+    coin. A coin is dropped once a call takes it. The list is in memory only.
+    A purpose-built form that returns coins should call `recordCoins` so they
+    show up. `QualifiedShieldedCoinInfo` (a coin plus its Merkle-tree index)
+    has no form.
+  - **Return values are shown** under the form (`formatResult` in
+    `lib/ledger-format.ts`; nothing for `[]`). For that, `onSubmit` resolves
+    to a `CircuitOutcome`: `{ ok: true, result }` or `{ ok: false }`. The
+    generated panel gets `ok` from `deployment.run(...)`, which resolves to
+    true on success and false on failure (the error is in `error`), and the
+    result from the wrapper's `.private.result`. If `onSubmit` returns
+    nothing, the form just submits.
+  - **`<WalletBalancesCard>`** (`components/wallet-balances-card.tsx`,
+    `hooks/use-wallet-balances.ts`, `lib/tokens.ts`) polls the connected
+    wallet's unshielded and shielded balances. NIGHT is labelled and shown in
+    STAR. Pass `labels` for the contract's own token colors (hex; compute them
+    with `rawTokenType(domainSep, address)`), and `refreshKey={busy}` to
+    re-poll when a call starts and ends. It shows the wallet's side only:
+    the indexer reports a contract's balance as of its deploy.
   - **No form, a TODO line instead:** a circuit with any other argument type
     (other structs, tuples, vectors, ...). Also a circuit with a Bytes
-    argument named like a secret or one-time value (`secret`, `sk`, `priv`,
-    `seed`, `nonce`, `salt`). A form would ask the user to paste or invent it.
-    Generate it in code, and keep a secret in private state and pass it from
-    there, as private-party does with `_secret`.
+    argument named like a secret
+    (`secret`, `sk`, `priv`, `seed`) or a one-time value (`nonce`, `salt`). A
+    form would ask the user to paste or invent it. Generate it in code
+    instead. Generate a secret once, keep it in private state and pass it
+    from there, as private-party does with `_secret`. Generate a one-time
+    value fresh for every call: a shielded coin follows from its mint nonce,
+    so reusing a nonce mints the same coin again (token-transfers'
+    `randomNonce`).
 
   The forms already submit and work as-is. Replace them with purpose-built UI
   where the example deserves it, as hello-world and calculator do. Run each
@@ -241,10 +262,13 @@ ignore them.
   hello-world, or calculator's, which replays the Node test's sequence). It
   also holds type-level checks, run by `typecheck`, that each wrapper hits the
   submitting `callTx` overload and takes exactly the circuit's arguments. Keep
-  them when you edit the wrappers. When the contract moves unshielded tokens,
-  the TODO block also shows `withUnshieldedBalance` (template-owned
-  `__tests__/contract-balance.ts`). An in-memory context starts with an empty
-  contract balance, so without it an `unshieldedBalance*` assert always fails.
+  them when you edit the wrappers. When the contract checks its unshielded
+  balance (`unshieldedBalance*`), the TODO block also shows
+  `withUnshieldedBalance` (template-owned `__tests__/contract-balance.ts`). An
+  in-memory context starts with an empty contract balance, so without it such
+  an assert always fails. Plain sends and receives don't check it, and they run
+  in memory without it. When the contract moves tokens, the TODO block points
+  at the call's `Effects` (see Gotchas).
 - **Input validation:** a circuit's own checks (Uint range casts, asserts,
   a throwing witness) reject bad input while midnight-js runs the circuit
   locally, before proving or any wallet prompt. The raw message is a
@@ -252,7 +276,10 @@ ignore them.
   failed". If you pre-check inputs in the panel for a readable reason, test the
   pre-check against the real circuits so the two can't drift (calculator's
   `evaluate()` is checked this way on an edge-value grid).
-- **`README.md`**
+- **`README.md`:** what the UI adds, and a "TODO: end-to-end verification
+  with Lace" checklist until those steps pass.
+- **`verification.json`:** the status of the steps CI can't run (see the
+  Verification checklist).
 
 When deploying needs constructor args, or the private-state factory takes
 arguments, the generator cannot invent values:
@@ -428,6 +455,16 @@ suites' DUST. Don't copy it into an example; extend the shared one.
   in vitest. Wrap the context in `withUnshieldedBalance(ctx, amount)` from
   `__tests__/contract-balance.ts`, with what the chain would hold at that
   point (see private-party's circuits test).
+- **Token movements aren't ledger state:** mints, sends and receives don't
+  show up in `ledger()`. In memory, read them from
+  `context.currentQueryContext.effects` (`unshieldedMints`,
+  `unshieldedInputs`, `unshieldedOutputs`, `claimedUnshieldedSpends`,
+  `shieldedMints`, `claimedShieldedReceives`, ...). Those Maps are keyed by
+  objects (`{ tag: "unshielded", raw }`, `{ tag: "user", address }`), so
+  `get()` with a fresh object never matches; compare entries (see
+  token-transfers' circuits test). In the browser, show the wallet's
+  balances. The indexer's contract-balance query reports deploy-time
+  balances, per the token-transfers Node test.
 - **jsdom and `@scure/base`:** the address codec checks `instanceof
   Uint8Array`, which fails across jsdom's realm. Test code that encodes or
   decodes Bech32m under `// @vitest-environment node`.
@@ -485,3 +522,9 @@ Run the checks in order, and report which ones you actually ran.
      the page re-joins and the user can still act. A wrong passphrase is
      refused.
    - Then repeat on preprod.
+8. Record what you ran. In `ui/verification.json`, set each step you ran to
+   `verified` (or `partial`), with a `date` and `notes` saying exactly what
+   ran. Then run `yarn new:ui <name> --sync`, which regenerates the table in
+   `templates/ui/VERIFIED.md`. Once the Lace checklist in `ui/README.md`
+   passes, delete it: `--check` refuses a `laceCalls: verified` while it's
+   still there.
